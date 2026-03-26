@@ -246,6 +246,16 @@ const UPGRADES: Upgrade[] = [
     icon: [[0,1,1,1,0],[1,0,0,0,1],[1,0,0,0,1],[1,0,0,0,1],[0,1,1,1,0]],
     apply: () => { /* handled in update */ },
   },
+  {
+    id: 'armor', name: 'ARMOR', desc: 'REDUCE DAMAGE',
+    icon: [[0,1,1,1,0],[1,1,1,1,1],[1,1,0,1,1],[1,1,1,1,1],[0,1,1,1,0]],
+    apply: () => { /* checked on damage */ },
+  },
+  {
+    id: 'dodge', name: 'DODGE', desc: 'CHANCE TO EVADE',
+    icon: [[0,0,0,1,0],[0,0,1,0,0],[0,1,0,0,0],[0,0,1,0,0],[0,0,0,1,0]],
+    apply: () => { /* checked on damage */ },
+  },
 ];
 
 // ── Combo system (2 maxed upgrades = passive bonus) ──
@@ -286,6 +296,15 @@ const COMBOS: Combo[] = [
     color: '#44ff88', icon: [[0,1,0,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0],[0,1,0,1,0]] },
   { id: 'warp_field', name: 'WARP FIELD', desc: 'MAGNET AURA + ENEMY PUSH', upgrade1: 'pickup_radius', upgrade2: 'move_speed',
     color: '#cc88ff', icon: [[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1]] },
+  // Defensive combos
+  { id: 'iron_skin', name: 'IRON SKIN', desc: 'REGEN + 50% DAMAGE REDUCE', upgrade1: 'armor', upgrade2: 'max_hp',
+    color: '#aaaacc', icon: [[0,1,1,1,0],[1,1,1,1,1],[1,1,1,1,1],[1,1,1,1,1],[0,1,1,1,0]] },
+  { id: 'reflect', name: 'REFLECT', desc: 'DEFLECT ENEMY PROJECTILES', upgrade1: 'armor', upgrade2: 'thorns',
+    color: '#4488ff', icon: [[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0]] },
+  { id: 'phantom', name: 'PHANTOM', desc: 'DODGE = INVISIBLE 2S', upgrade1: 'dodge', upgrade2: 'move_speed',
+    color: '#8844cc', icon: [[0,0,1,0,0],[0,1,1,1,0],[0,1,0,1,0],[0,0,1,0,0],[0,0,0,0,0]] },
+  { id: 'fortress', name: 'FORTRESS', desc: 'DODGE = 1S FULL SHIELD', upgrade1: 'dodge', upgrade2: 'armor',
+    color: '#44aaff', icon: [[0,1,1,1,0],[1,0,0,0,1],[1,0,1,0,1],[1,0,0,0,1],[0,1,1,1,0]] },
 ];
 
 // Get active combos
@@ -471,6 +490,7 @@ const game = {
   bossCount: 0,
   superBossSpawned: false,
   superBossTimer: Math.floor(5 * 60 * FPS), // at 5:00
+  megaBossSpawned: false,
   // Selection screen
   pendingLevelUps: 0,
   selectionOptions: [] as (Upgrade | Affix)[],
@@ -723,20 +743,19 @@ function canMove(x: number, y: number, dx: number, dy: number, r: number): boole
 // ── Difficulty scaling (time-based) ──
 function getDifficulty() {
   const minutes = game.time / (FPS * 60);
-  const t = Math.min(1, minutes / 5); // 0→1 over first 5 minutes
-  const t2 = Math.max(0, Math.min(1, (minutes - 5) / 10)); // 0→1 from 5-15 min (late game)
-  // Exponential curve: slow early, ramps hard late
-  const curve = t * t;
-  const lateCurve = t * t * t;
+  const t = Math.min(1, minutes / 10); // 0→1 smooth over 10 minutes
+  const curve = t * t; // quadratic ramp
+  const lateCurve = t * t * t; // steeper for spawn rates
+  // After 10min: everything spikes hard
+  const postBoss = Math.max(0, minutes - 10);
+  const rage = postBoss * 0.3; // linear ramp after 10min, gets crazy fast
   return {
-    // Spawn interval: 90 frames early → 3 frames at 5min → 2 at 10min
-    spawnInterval: Math.max(2, Math.floor(90 - lateCurve * 87 - t2 * 1)),
-    // Batch: 1 early → 10 at 5min → 18 at 10min
-    spawnBatch: Math.min(18, 1 + Math.floor(lateCurve * 9) + Math.floor(t2 * 8)),
-    bruteChance: Math.min(0.7, 0.05 + curve * 0.55 + t2 * 0.1),
-    hpMult: 1 + curve * 2.5 + t2 * 3,       // x1 → x3.5 at 5min → x6.5 at 10min
-    speedMult: 1 + curve * 0.6 + t2 * 0.4,  // x1 → x1.6 at 5min → x2 at 10min
-    contactDmg: Math.ceil(3 + curve * 12 + t2 * 10), // 3 → 15 at 5min → 25 at 10min
+    spawnInterval: Math.max(2, Math.floor(90 - lateCurve * 85 - rage * 2)),
+    spawnBatch: Math.min(25, 1 + Math.floor(lateCurve * 12) + Math.floor(rage * 3)),
+    bruteChance: Math.min(0.8, 0.05 + curve * 0.5 + rage * 0.1),
+    hpMult: 1 + curve * 4 + rage * 2,           // x1 → x5 at 10min → ramps hard
+    speedMult: 1 + curve * 0.8 + rage * 0.15,   // x1 → x1.8 at 10min → faster
+    contactDmg: Math.ceil(3 + curve * 15 + rage * 5), // 3 → 18 at 10min → deadly
   };
 }
 
@@ -1177,6 +1196,51 @@ function applyAffixOnHit(x: number, y: number, damage: number, hitEnemy: Enemy) 
   }
 }
 
+// Central damage handler — applies armor, dodge, iron skin, phantom, fortress
+function damagePlayer(baseDmg: number, fromX: number, fromY: number): boolean {
+  if (player.invincible > 0) return false;
+
+  const armorLv = game.upgradeLevels.get('armor') || 0;
+  const dodgeLv = game.upgradeLevels.get('dodge') || 0;
+
+  // Dodge check (5% per level, max 30%)
+  if (dodgeLv > 0 && Math.random() < dodgeLv * 0.05) {
+    // Dodged!
+    spawnParticles(player.x, player.y, 5, '#8844cc', 2);
+    // PHANTOM combo — invisible 2s after dodge
+    if (game.activeCombos.includes('phantom')) {
+      player.invincible = 120; // 2s invincible
+      spawnParticles(player.x, player.y, 10, '#8844cc', 3);
+    }
+    // FORTRESS combo — 1s full shield after dodge
+    if (game.activeCombos.includes('fortress')) {
+      player.invincible = Math.max(player.invincible, 60);
+      spawnParticles(player.x, player.y, 10, '#44aaff', 3);
+    }
+    return false; // no damage
+  }
+
+  // Armor reduction (flat -1 per level)
+  let dmg = Math.max(1, baseDmg - armorLv);
+
+  // IRON SKIN combo — 50% damage reduction + regen tick
+  if (game.activeCombos.includes('iron_skin')) {
+    dmg = Math.max(1, Math.ceil(dmg * 0.5));
+    // Small heal on hit
+    player.hp = Math.min(player.hp + 1, player.maxHp);
+  }
+
+  player.hp -= dmg;
+  player.invincible = 60;
+  game.damageFlash = 12;
+  game.shakeTimer = 8;
+  game.hitDirX = fromX - player.x;
+  game.hitDirY = fromY - player.y;
+  Sound.hit();
+  spawnParticles(player.x, player.y, 10, COL.playerVisor, 2);
+  return true;
+}
+
 function applyAffixOnKill(_x: number, _y: number) {
   // Affix life steal
   if (game.activeAffixes.includes('affix_lifesteal') && Math.random() < 0.15) {
@@ -1448,50 +1512,116 @@ function update() {
     }
   }
 
-  // NOVA PULSE — ALL stats scale
+  // NOVA PULSE — BLACK HOLE: travels to target, stops, grows for 4s, implodes
   if (game.activeCombos.includes('nova_pulse')) {
-    const novaFreq = Math.max(2 * FPS, 5 * FPS - uFireRate * 20);
+    const novaFreq = Math.max(4 * FPS, 10 * FPS - uFireRate * 25);
     if (!game.novaOrbActive && game.time % novaFreq === 0 && enemies.length > 0) {
-      const target = enemies[Math.floor(Math.random() * Math.min(enemies.length, 20))];
-      const aim = aimDir(player, target);
-      const orbSpeed = 1.2 + uVelocity * 0.15;
-      game.novaOrbActive = { x: player.x, y: player.y, dx: aim.x * orbSpeed, dy: aim.y * orbSpeed,
-        life: 100 + uPierce * 15, maxLife: 100 + uPierce * 15 };
+      // Find densest enemy cluster near player
+      let bestX = player.x, bestY = player.y, bestCount = 0;
+      for (const e of enemies) {
+        if (dist2(player, e) > 200 * 200) continue;
+        let count = 0;
+        for (const e2 of enemies) { if (dist2(e, e2) < 60 * 60) count++; }
+        if (count > bestCount) { bestCount = count; bestX = e.x; bestY = e.y; }
+      }
+      const aim = aimDir(player, { x: bestX, y: bestY });
+      const targetDist = Math.sqrt(dist2(player, { x: bestX, y: bestY }));
+      const travelTime = Math.min(60, Math.floor(targetDist / 2)); // time to reach target
+      game.novaOrbActive = {
+        x: player.x, y: player.y,
+        dx: aim.x * (targetDist / Math.max(1, travelTime)),
+        dy: aim.y * (targetDist / Math.max(1, travelTime)),
+        life: travelTime + 4 * FPS + 10, // travel + grow + implode
+        maxLife: travelTime + 4 * FPS + 10,
+      };
+      (game.novaOrbActive as any).travelTime = travelTime;
+      (game.novaOrbActive as any).growStart = travelTime;
+      (game.novaOrbActive as any).currentRadius = 5;
     }
     if (game.novaOrbActive) {
-      const orb = game.novaOrbActive;
-      orb.x += orb.dx; orb.y += orb.dy;
-      orb.dx *= 0.98; orb.dy *= 0.98;
+      const orb = game.novaOrbActive as any;
       orb.life--;
-      const pullR = 60 + uCaliber * 5 + uMagnet * 8;
-      const pullForce = 1.5 + uMagnet * 0.3;
-      for (const e of enemies) {
-        const dx = orb.x - e.x, dy = orb.y - e.y;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (d < pullR && d > 2) {
-          e.x += (dx / d) * pullForce * (1 - d / pullR);
-          e.y += (dy / d) * pullForce * (1 - d / pullR);
-          // Thorns: damage while being sucked in
-          if (uThorns > 0 && game.time % 15 === 0) { e.hp -= uThorns; e.hitFlash = 3; }
-        }
-      }
-      if (orb.life <= 0) {
-        const explR = 50 + uCaliber * 6;
-        for (let a = 0; a < 24; a++) {
-          const angle = (a / 24) * Math.PI * 2;
-          particles.push({ x: orb.x, y: orb.y, dx: Math.cos(angle) * 5, dy: Math.sin(angle) * 5,
-            life: 25, maxLife: 25, color: a % 3 === 0 ? '#ff44ff' : a % 3 === 1 ? '#ffffff' : '#aa22ff', size: 3 + uCaliber * 0.3 });
-        }
-        game.shakeTimer = 6 + uDmg; Sound.explosion();
+      const travelLeft = orb.life - (orb.maxLife - orb.travelTime);
+
+      if (travelLeft > 0) {
+        // Phase 1: TRAVELING to target
+        orb.x += orb.dx; orb.y += orb.dy;
+      } else {
+        // Phase 2: GROWING at location
+        orb.dx = 0; orb.dy = 0;
+        const growTime = 4 * FPS;
+        const growProgress = 1 - (orb.life - 10) / growTime; // 0→1 over 4s
+        const maxRadius = 30 + uCaliber * 8 + uMagnet * 5;
+        orb.currentRadius = 5 + growProgress * maxRadius;
+
+        // Pull enemies with increasing force
+        const pullR = orb.currentRadius * 2.5;
+        const pullForce = 1 + growProgress * 4 + uMagnet * 0.5;
         for (const e of enemies) {
-          if (dist2(orb, e) < explR * explR) {
-            e.hp -= uDmg * 4 + uThorns * 2;
-            e.hitFlash = 12;
-            comboHeal(2);
+          const edx = orb.x - e.x, edy = orb.y - e.y;
+          const ed = Math.sqrt(edx * edx + edy * edy);
+          if (ed < pullR && ed > 2) {
+            const f = pullForce * (1 - ed / pullR);
+            e.x += (edx / ed) * f;
+            e.y += (edy / ed) * f;
+            // Crush damage while being sucked (thorns)
+            if (uThorns > 0 && game.time % 10 === 0) { e.hp -= uThorns; e.hitFlash = 3; }
           }
         }
-        game.novaOrbActive = null;
+        // Also pull drops
+        for (const dr of drops) {
+          const ddx = orb.x - dr.x, ddy = orb.y - dr.y;
+          const dd = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (dd < pullR && dd > 2) { dr.x += (ddx / dd) * 2; dr.y += (ddy / dd) * 2; }
+        }
+
+        // Continuous shake as it grows
+        if (growProgress > 0.5) game.shakeTimer = Math.max(game.shakeTimer, 2);
       }
+
+      // Phase 3: IMPLOSION
+      if (orb.life <= 10) {
+        if (orb.life === 10) {
+          // BOOM — massive implosion
+          const explR = orb.currentRadius * 2;
+          Sound.explosion();
+          game.shakeTimer = 20;
+          game.lightningFlash = 8;
+          // Implosion visual — particles rush INWARD then explode OUT
+          for (let a = 0; a < 32; a++) {
+            const angle = (a / 32) * Math.PI * 2;
+            const dist = explR * 0.8;
+            // Inward rush
+            particles.push({
+              x: orb.x + Math.cos(angle) * dist, y: orb.y + Math.sin(angle) * dist,
+              dx: -Math.cos(angle) * 4, dy: -Math.sin(angle) * 4,
+              life: 10, maxLife: 10,
+              color: a % 2 === 0 ? '#aa22ff' : '#ff44ff', size: 4,
+            });
+          }
+          // Then outward explosion
+          for (let a = 0; a < 24; a++) {
+            const angle = (a / 24) * Math.PI * 2;
+            particles.push({
+              x: orb.x, y: orb.y,
+              dx: Math.cos(angle) * 6, dy: Math.sin(angle) * 6,
+              life: 25, maxLife: 25,
+              color: a % 3 === 0 ? '#ff44ff' : a % 3 === 1 ? '#ffffff' : '#aa22ff',
+              size: 5 + uCaliber * 0.3,
+            });
+          }
+          spawnParticles(orb.x, orb.y, 30, '#ffffff', 5);
+          // Damage everything in range
+          for (const e of enemies) {
+            if (dist2(orb, e) < explR * explR) {
+              e.hp -= uDmg * 6 + uThorns * 3;
+              e.hitFlash = 15;
+              comboHeal(2);
+            }
+          }
+        }
+      }
+      if (orb.life <= 0) game.novaOrbActive = null;
     }
   }
 
@@ -1527,9 +1657,12 @@ function update() {
       if (d >= prevR && d < sr.radius + 10) {
         const dx = e.x - sr.x, dy = e.y - sr.y;
         if (d > 0) {
-          const pushForce = 20 + uDmg * 3 + uThorns * 2;
-          e.x += (dx / d) * pushForce;
-          e.y += (dy / d) * pushForce;
+          const pushForce = 8 + uDmg * 1 + uThorns;
+          const newX = e.x + (dx / d) * pushForce;
+          const newY = e.y + (dy / d) * pushForce;
+          // Clamp to map bounds
+          e.x = Math.max(TILE, Math.min(MAP_W * TILE - TILE, newX));
+          e.y = Math.max(TILE, Math.min(MAP_H * TILE - TILE, newY));
           e.hp -= uDmg * 2 + uThorns;
           comboHeal(1);
           e.hitFlash = 8;
@@ -1781,7 +1914,7 @@ function update() {
   // ── Growing veins ──
   const minutesNow = game.time / (FPS * 60);
   // Spawn new veins over time (1 every ~30s, starting at 1 min, max 8 total)
-  if (minutesNow >= 1 && veins.length < 8 && game.time % (30 * FPS) === 0 && veinSpawns.length > 0) {
+  if (minutesNow >= 10 && veins.length < 8 && game.time % (30 * FPS) === 0 && veinSpawns.length > 0) {
     // Pick a random spawn point, check it doesn't overlap existing veins
     for (let attempt = 0; attempt < 10; attempt++) {
       const idx = Math.floor(Math.random() * veinSpawns.length);
@@ -2144,18 +2277,38 @@ function update() {
       }
     }
     if (!l.fromPlayer) {
+      // Player projectiles destroy enemy projectiles
+      let intercepted = false;
+      for (let j = lasers.length - 1; j >= 0; j--) {
+        if (j === i) continue;
+        const other = lasers[j];
+        if (!other.fromPlayer) continue;
+        const dx = l.x - other.x, dy = l.y - other.y;
+        if (dx * dx + dy * dy < 10 * 10) {
+          spawnParticles(l.x, l.y, 4, '#8888ff', 2);
+          lasers.splice(Math.max(i, j), 1);
+          lasers.splice(Math.min(i, j), 1);
+          intercepted = true;
+          i -= 2;
+          break;
+        }
+      }
+      if (intercepted) continue;
+
+      // REFLECT combo — deflect enemy projectiles back
+      if (game.activeCombos.includes('reflect')) {
+        l.dx = -l.dx; l.dy = -l.dy;
+        l.fromPlayer = true;
+        l.life = 40;
+        l.color = '#4488ff'; l.glowColor = '#88aaff';
+        spawnParticles(l.x, l.y, 5, '#4488ff', 2);
+        continue;
+      }
       // Enemy projectile → player collision
       if (player.invincible <= 0) {
         const ddx = l.x - player.x, ddy = l.y - player.y;
         if (ddx * ddx + ddy * ddy < 8 * 8) {
-          player.hp -= l.damage;
-          player.invincible = 30;
-          game.damageFlash = 8;
-          game.shakeTimer = 4;
-          game.hitDirX = l.x - player.x;
-          game.hitDirY = l.y - player.y;
-          Sound.hit();
-          spawnParticles(player.x, player.y, 6, '#ff2266', 2);
+          const wasHit = damagePlayer(l.damage, l.x, l.y);
           lasers.splice(i, 1);
         }
       }
@@ -2180,14 +2333,8 @@ function update() {
         }
         const diff = getDifficulty();
         const dmg = e.type === 'superboss' ? 30 : e.type === 'boss' ? 20 : e.type === 'miniboss' ? 15 : diff.contactDmg;
-        player.hp -= dmg;
-        player.invincible = 60;
-        game.damageFlash = 12;
-        game.shakeTimer = 8;
-        game.hitDirX = e.x - player.x;
-        game.hitDirY = e.y - player.y;
-        Sound.hit();
-        spawnParticles(player.x, player.y, 10, COL.playerVisor, 2);
+        const wasHit = damagePlayer(dmg, e.x, e.y);
+        if (!wasHit) continue; // dodged
         // Thorns (3x if BLADE STORM combo active)
         const bladeStorm = game.activeCombos.includes('blade_storm');
         if (thornsLv > 0) {
@@ -2464,6 +2611,31 @@ function update() {
     game.superBossTimer--;
     if (game.superBossTimer <= 0) {
       spawnSuperBoss();
+    }
+  }
+
+  // MEGA BOSS at 10 minutes — the difficulty spike
+  const minutesForBoss = game.time / (FPS * 60);
+  if (!game.megaBossSpawned && minutesForBoss >= 10) {
+    game.megaBossSpawned = true;
+    // Spawn a mega boss — 3x super boss HP
+    const pos = findSpawnPos();
+    if (pos) {
+      const diff = getDifficulty();
+      const hp = Math.ceil(300 * diff.hpMult);
+      enemies.push({
+        x: pos.x, y: pos.y, hp, maxHp: hp,
+        speed: 0.35 * diff.speedMult, baseSpeed: 0.35 * diff.speedMult,
+        type: 'superboss', dir: 'down',
+        shootTimer: 40, hitFlash: 0, animTimer: 0,
+        bossPhase: 0, bossAttackTimer: 60,
+        slowTimer: 0, burnTimer: 0, burnDamage: 0,
+        dashTimer: 0, dashDirX: 0, dashDirY: 0, emergeTimer: 60,
+      });
+      game.shakeTimer = 20;
+      game.lightningFlash = 12;
+      Sound.thunder();
+      spawnParticles(player.x, player.y, 30, '#ff44ff', 5);
     }
   }
 
@@ -2827,6 +2999,7 @@ function resetGame() {
   game.miniBossCount = 0;
   game.bossCount = 0;
   game.superBossSpawned = false;
+  game.megaBossSpawned = false;
   game.superBossTimer = Math.floor(2.5 * 60 * FPS);
   game.pendingLevelUps = 0;
   game.activeCombos = [];
@@ -3514,9 +3687,13 @@ function render() {
 
     const ex = Math.floor(esx), ey = Math.floor(esy);
     // Blinking — eye closes and opens slowly
-    const blinkCycle = Math.sin(game.time * 0.008 + we.x * 0.3 + we.y * 0.7);
-    const blinkPhase = blinkCycle > 0.85 ? (1 - (blinkCycle - 0.85) / 0.15) : 1; // 0→1, 0=closed
-    if (blinkPhase < 0.05) continue; // fully closed, skip drawing
+    // Blink — open most of the time, closes over 10 frames, stays shut 5, reopens 10
+    const blinkTimer = (game.time + Math.floor(we.x * 7 + we.y * 13)) % 480; // blink every ~8s
+    let blinkPhase = 1; // 1 = fully open
+    if (blinkTimer < 10) blinkPhase = 1 - blinkTimer / 10;       // closing
+    else if (blinkTimer < 15) blinkPhase = 0;                     // shut
+    else if (blinkTimer < 25) blinkPhase = (blinkTimer - 15) / 10; // opening
+    if (blinkPhase < 0.05) continue;
 
     const eyeW = sz, eyeH = sz * 0.65 * blinkPhase; // taller = more open
     const pupilR = sz * 0.25;
@@ -3977,42 +4154,102 @@ function render() {
     bx.lineWidth = 1;
   }
 
-  // ══ NOVA ORB visual — gravity sphere ══
+  // ══ BLACK HOLE visual — grows then implodes ══
   if (game.novaOrbActive) {
-    const orb = game.novaOrbActive;
+    const orb = game.novaOrbActive as any;
     const ox = orb.x - camX, oy = orb.y - camY;
-    const lifeRatio = orb.life / orb.maxLife;
-    const orbSize = 8 + (1 - lifeRatio) * 12; // grows as it slows
+    const r = orb.currentRadius || 5;
+    const isGrowing = orb.dx === 0 && orb.dy === 0;
+    const isImploding = orb.life <= 10;
+
+    // Dark void center — actual darkness (not additive)
+    if (isGrowing && !isImploding) {
+      bx.fillStyle = '#000000';
+      bx.globalAlpha = 0.8;
+      bx.beginPath();
+      bx.arc(Math.floor(ox), Math.floor(oy), r, 0, Math.PI * 2);
+      bx.fill();
+      bx.globalAlpha = 1;
+    }
 
     bx.globalCompositeOperation = 'lighter';
-    // Outer pull ring
-    bx.strokeStyle = '#aa22ff';
-    bx.globalAlpha = 0.3 + Math.sin(game.time * 0.2) * 0.15;
-    bx.lineWidth = 2;
-    bx.beginPath();
-    bx.arc(Math.floor(ox), Math.floor(oy), orbSize + 20, 0, Math.PI * 2);
-    bx.stroke();
-    // Spinning gravity lines
-    for (let g = 0; g < 6; g++) {
-      const ga = game.time * 0.1 + (g / 6) * Math.PI * 2;
-      const gx = ox + Math.cos(ga) * (orbSize + 15);
-      const gy = oy + Math.sin(ga) * (orbSize + 15);
-      bx.fillStyle = '#cc44ff';
-      bx.globalAlpha = 0.5;
-      bx.fillRect(gx - 1, gy - 1, 2, 2);
+
+    if (!isImploding) {
+      // Accretion disk — spinning rings around the black hole
+      const ringCount = isGrowing ? 3 : 1;
+      for (let ring = 0; ring < ringCount; ring++) {
+        const ringR = r + 5 + ring * 8;
+        const ringSpeed = 0.08 - ring * 0.02;
+        bx.strokeStyle = ring === 0 ? '#aa22ff' : ring === 1 ? '#ff44aa' : '#ff8844';
+        bx.globalAlpha = isGrowing ? 0.3 + (r / 40) * 0.3 : 0.3;
+        bx.lineWidth = isGrowing ? 2 + ring : 1;
+        bx.beginPath();
+        bx.arc(Math.floor(ox), Math.floor(oy), ringR, game.time * ringSpeed, game.time * ringSpeed + Math.PI * 1.5);
+        bx.stroke();
+      }
+
+      // Spiral arms being sucked in
+      if (isGrowing) {
+        const armCount = 8;
+        for (let a = 0; a < armCount; a++) {
+          const baseAngle = game.time * 0.06 + (a / armCount) * Math.PI * 2;
+          const armR = r * 2 + 10;
+          const sx = ox + Math.cos(baseAngle) * armR;
+          const sy = oy + Math.sin(baseAngle) * armR;
+          bx.fillStyle = a % 2 === 0 ? '#6622aa' : '#aa44ff';
+          bx.globalAlpha = 0.4 * (r / 40);
+          bx.fillRect(sx - 1, sy - 1, 2, 2);
+        }
+      }
+
+      // Purple glow edge
+      bx.strokeStyle = '#8822cc';
+      bx.globalAlpha = 0.4;
+      bx.lineWidth = 3;
+      bx.beginPath();
+      bx.arc(Math.floor(ox), Math.floor(oy), r + 2, 0, Math.PI * 2);
+      bx.stroke();
+
+      // Bright event horizon
+      bx.strokeStyle = '#cc44ff';
+      bx.globalAlpha = 0.6;
+      bx.lineWidth = 1;
+      bx.beginPath();
+      bx.arc(Math.floor(ox), Math.floor(oy), r, 0, Math.PI * 2);
+      bx.stroke();
     }
-    // Core
-    bx.fillStyle = '#ff44ff';
-    bx.globalAlpha = 0.8;
-    bx.beginPath();
-    bx.arc(Math.floor(ox), Math.floor(oy), orbSize, 0, Math.PI * 2);
-    bx.fill();
-    // Bright center
-    bx.fillStyle = '#ffffff';
-    bx.globalAlpha = 0.6;
-    bx.beginPath();
-    bx.arc(Math.floor(ox), Math.floor(oy), orbSize * 0.4, 0, Math.PI * 2);
-    bx.fill();
+
+    // Traveling phase — small glowing orb
+    if (!isGrowing && !isImploding) {
+      bx.fillStyle = '#aa44ff';
+      bx.globalAlpha = 0.8;
+      bx.beginPath();
+      bx.arc(Math.floor(ox), Math.floor(oy), 6, 0, Math.PI * 2);
+      bx.fill();
+      bx.fillStyle = '#ffffff';
+      bx.globalAlpha = 0.4;
+      bx.beginPath();
+      bx.arc(Math.floor(ox), Math.floor(oy), 3, 0, Math.PI * 2);
+      bx.fill();
+    }
+
+    // Implosion flash
+    if (isImploding) {
+      const impFrame = 10 - orb.life;
+      const flashR = r + impFrame * 8;
+      bx.fillStyle = '#ffffff';
+      bx.globalAlpha = Math.max(0, 0.5 - impFrame * 0.05);
+      bx.beginPath();
+      bx.arc(Math.floor(ox), Math.floor(oy), flashR, 0, Math.PI * 2);
+      bx.fill();
+      bx.strokeStyle = '#ff44ff';
+      bx.globalAlpha = Math.max(0, 0.8 - impFrame * 0.08);
+      bx.lineWidth = 3;
+      bx.beginPath();
+      bx.arc(Math.floor(ox), Math.floor(oy), flashR * 0.7, 0, Math.PI * 2);
+      bx.stroke();
+    }
+
     bx.globalAlpha = 1;
     bx.lineWidth = 1;
     bx.globalCompositeOperation = 'source-over';
@@ -4487,6 +4724,8 @@ function getStatGain(id: string, newLv: number): string {
     case 'life_steal': return '+2% CHANCE';
     case 'thorns': return '+2 DMG';
     case 'orbital': return '+1 ORB';
+    case 'armor': return '-1 DMG TAKEN';
+    case 'dodge': return '+5% EVADE';
     default: return 'LV ' + newLv;
   }
 }
