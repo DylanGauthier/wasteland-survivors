@@ -110,6 +110,13 @@ export const Sound = {
     playNoise(0.15, 0.01, 800);
   },
 
+  // Thunder rumble (low distant boom)
+  thunder() {
+    playTone(40, 0.6, 'sine', 0.008, 15);
+    playTone(55, 0.4, 'sawtooth', 0.004, 20);
+    playNoise(0.5, 0.006, 200);
+  },
+
   // Game over
   gameOver() {
     playTone(300, 0.2, 'square', 0.012);

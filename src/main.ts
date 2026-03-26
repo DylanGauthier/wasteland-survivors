@@ -74,7 +74,85 @@ function generateMap() {
   for (let y = MAP_H / 2 - 3; y < MAP_H / 2 + 3; y++)
     for (let x = MAP_W / 2 - 3; x < MAP_W / 2 + 3; x++)
       map[y][x] = 0;
+
+  // Find wall clusters via flood fill, then place eyes + fissures
+  veins.length = 0;
+  wallEyes.length = 0;
+  const visited = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(false));
+
+  for (let sy = 0; sy < MAP_H; sy++) {
+    for (let sx = 0; sx < MAP_W; sx++) {
+      if (map[sy][sx] !== 3 || visited[sy][sx]) continue;
+      // Flood fill to find cluster
+      const cluster: Vec[] = [];
+      const stack: Vec[] = [{ x: sx, y: sy }];
+      while (stack.length > 0) {
+        const p = stack.pop()!;
+        if (p.x < 0 || p.x >= MAP_W || p.y < 0 || p.y >= MAP_H) continue;
+        if (visited[p.y][p.x] || map[p.y][p.x] !== 3) continue;
+        visited[p.y][p.x] = true;
+        cluster.push(p);
+        stack.push({ x: p.x+1, y: p.y }, { x: p.x-1, y: p.y }, { x: p.x, y: p.y+1 }, { x: p.x, y: p.y-1 });
+      }
+
+      if (cluster.length < 8) continue; // need decent size for an eye
+
+      // Find center of cluster
+      let cx = 0, cy = 0;
+      for (const p of cluster) { cx += p.x; cy += p.y; }
+      cx = Math.floor(cx / cluster.length) * TILE + TILE / 2;
+      cy = Math.floor(cy / cluster.length) * TILE + TILE / 2;
+
+      // Place BIG eye at center
+      // Compute cluster bounding box to limit eye size
+      let minCX = MAP_W, maxCX = 0, minCY = MAP_H, maxCY = 0;
+      for (const p of cluster) { minCX = Math.min(minCX, p.x); maxCX = Math.max(maxCX, p.x); minCY = Math.min(minCY, p.y); maxCY = Math.max(maxCY, p.y); }
+      const clusterW = (maxCX - minCX + 1) * TILE;
+      const clusterH = (maxCY - minCY + 1) * TILE;
+      const eyeSize = Math.min(clusterW * 0.4, clusterH * 0.4, 50);
+      wallEyes.push({ x: cx, y: cy, size: eyeSize });
+
+      // Find edge tiles of cluster (adjacent to non-wall)
+      const edges: Vec[] = [];
+      for (const p of cluster) {
+        const adj = [[1,0],[-1,0],[0,1],[0,-1]];
+        for (const [adx, ady] of adj) {
+          const nx = p.x + adx, ny = p.y + ady;
+          if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H || map[ny][nx] !== 3) {
+            edges.push({ x: p.x * TILE + TILE / 2, y: p.y * TILE + TILE / 2 });
+            break;
+          }
+        }
+      }
+
+      // Store potential vein spawn points (will grow during gameplay)
+      const fissureCount = Math.min(4, 1 + Math.floor(cluster.length / 5));
+      for (let f = 0; f < fissureCount; f++) {
+        if (edges.length === 0) break;
+        const start = edges[Math.floor(Math.random() * edges.length)];
+        const angle = Math.atan2(start.y - cy, start.x - cx) + (Math.random() - 0.5) * 0.5;
+        veinSpawns.push({ x: start.x, y: start.y, angle });
+      }
+    }
+  }
 }
+
+// Growing veins — spawn from wall clusters and grow over time
+interface GrowingVein {
+  segments: Vec[];
+  targetLen: number;     // max segments
+  growTimer: number;     // frames until next segment grows
+  growRate: number;      // frames between growths
+  angle: number;         // general direction
+  startTime: number;     // game time when vein started
+  width: number;         // current max width (grows too)
+  maxWidth: number;
+}
+const veins: GrowingVein[] = [];
+// Wall eyes
+const wallEyes: (Vec & { size: number })[] = [];
+// Vein spawn points (edges of wall clusters, computed at map gen)
+const veinSpawns: { x: number; y: number; angle: number }[] = [];
 
 function noise(x: number, y: number): number {
   const ix = Math.floor(x), iy = Math.floor(y);
@@ -419,7 +497,15 @@ const game = {
   sniperTimer: 0,
   railgunTimer: 0,
   bulletTimeTimer: 0,
-  bulletTimeActive: 0, // frames remaining of slow-mo
+  bulletTimeActive: 0,
+  // Visual FX
+  ghostTrail: [] as { x: number; y: number; dir: Dir; age: number }[],
+  freezeFrame: 0,       // frames of freeze on boss kill
+  freezeZoom: 0,        // zoom amount during freeze
+  lightningTimer: 0,    // countdown to next lightning flash
+  lightningFlash: 0,
+  hitDirX: 0,           // direction of last damage taken
+  hitDirY: 0,
   // Drones
   droneAngle: 0,
   droneCount: 0,
@@ -491,8 +577,9 @@ interface Enemy {
   dashTimer?: number;
   dashDirX?: number;
   dashDirY?: number;
-  elite?: EliteAffix;    // elite enemy affix
+  elite?: EliteAffix;
   teleportTimer?: number;
+  emergeTimer: number;   // frames of emergence animation (starts at 30, counts down)
   slowTimer: number;
   burnTimer: number;
   burnDamage: number;
@@ -535,6 +622,13 @@ const particles: Particle[] = [];
 const drops: Drop[] = [];
 const chests: Chest[] = [];
 const chainArcs: ChainArc[] = [];
+
+// Ash rain (screen-space, permanent ambient)
+interface AshParticle { x: number; y: number; speed: number; size: number; alpha: number; }
+const ashRain: AshParticle[] = [];
+for (let i = 0; i < 120; i++) {
+  ashRain.push({ x: Math.random() * 640, y: Math.random() * 480, speed: 0.15 + Math.random() * 0.5, size: 1 + Math.random() * 1.5, alpha: 0.12 + Math.random() * 0.2 });
+}
 
 // Danger zones (AoE warnings)
 // Expanding shockwave rings (visual)
@@ -696,6 +790,7 @@ function makeEnemy(pos: Vec, type: Enemy['type'], diff: ReturnType<typeof getDif
     slowTimer: 0, burnTimer: 0, burnDamage: 0,
     dashTimer: type === 'dasher' ? 90 + Math.floor(Math.random() * 60) : 0,
     dashDirX: 0, dashDirY: 0,
+    emergeTimer: 30,
   };
 }
 
@@ -813,8 +908,8 @@ function spawnSuperBoss() {
 // ── Drops ──
 function spawnDrops(x: number, y: number, enemyType: Enemy['type']) {
   if (drops.length > 400) return; // perf cap
-  const xpCount = enemyType === 'superboss' ? 25 : enemyType === 'boss' ? 15 : enemyType === 'miniboss' ? 8 : enemyType === 'brute' ? 3 : 1;
-  const xpValue = enemyType === 'superboss' ? 8 : enemyType === 'boss' ? 5 : enemyType === 'miniboss' ? 3 : enemyType === 'brute' ? 2 : 1;
+  const xpCount = enemyType === 'superboss' ? 30 : enemyType === 'boss' ? 20 : enemyType === 'miniboss' ? 10 : enemyType === 'brute' ? 4 : 2;
+  const xpValue = enemyType === 'superboss' ? 10 : enemyType === 'boss' ? 6 : enemyType === 'miniboss' ? 4 : enemyType === 'brute' ? 2 : 1;
   for (let i = 0; i < xpCount; i++) {
     const angle = Math.random() * Math.PI * 2;
     const dist = Math.random() * 12;
@@ -1139,6 +1234,13 @@ function update() {
     return;
   }
 
+  // Freeze frame (boss kill pause)
+  if (game.freezeFrame > 0) { game.freezeFrame--; game.freezeZoom *= 0.95; return; }
+
+  // Lightning flash decay (triggered by thunder super rare only)
+  // No ambient lightning — only from thunder affix
+  if (game.lightningFlash > 0) game.lightningFlash--;
+
   game.time++;
 
   // Player movement (keyboard + click-to-move)
@@ -1176,6 +1278,12 @@ function update() {
   }
 
   player.animTimer++;
+  // Ghost trail — record position every 4 frames when moving
+  if (player.moving && game.time % 4 === 0) {
+    game.ghostTrail.push({ x: player.x, y: player.y, dir: player.dir, age: 0 });
+    if (game.ghostTrail.length > 8) game.ghostTrail.shift();
+  }
+  for (const g of game.ghostTrail) g.age++;
   if (player.animTimer > 8) { player.animTimer = 0; player.animFrame = (player.animFrame + 1) % 4; }
   if (player.invincible > 0) player.invincible--;
 
@@ -1670,6 +1778,57 @@ function update() {
     }
   }
 
+  // ── Growing veins ──
+  const minutesNow = game.time / (FPS * 60);
+  // Spawn new veins over time (1 every ~30s, starting at 1 min, max 8 total)
+  if (minutesNow >= 1 && veins.length < 8 && game.time % (30 * FPS) === 0 && veinSpawns.length > 0) {
+    // Pick a random spawn point, check it doesn't overlap existing veins
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const idx = Math.floor(Math.random() * veinSpawns.length);
+      const sp = veinSpawns[idx];
+      // Check distance from existing veins
+      let tooClose = false;
+      for (const v of veins) {
+        const d = (v.segments[0].x - sp.x) ** 2 + (v.segments[0].y - sp.y) ** 2;
+        if (d < 80 * 80) { tooClose = true; break; }
+      }
+      if (tooClose) continue;
+      const maxW = 2 + Math.min(3, minutesNow * 0.3);
+      veins.push({
+        segments: [{ x: sp.x, y: sp.y }],
+        targetLen: 4 + Math.floor(Math.random() * 4), // 4-8 segments max
+        growTimer: 0,
+        growRate: 60 + Math.floor(Math.random() * 60), // grow a segment every 1-2s
+        angle: sp.angle,
+        startTime: game.time,
+        width: 1,
+        maxWidth: maxW,
+      });
+      veinSpawns.splice(idx, 1); // remove used spawn
+      break;
+    }
+  }
+  // Grow existing veins
+  for (const v of veins) {
+    // Width grows over time
+    const age = (game.time - v.startTime) / FPS;
+    v.width = Math.min(v.maxWidth, 1 + age * 0.1);
+    // Grow new segments
+    if (v.segments.length - 1 < v.targetLen) {
+      v.growTimer--;
+      if (v.growTimer <= 0) {
+        v.growTimer = v.growRate;
+        const last = v.segments[v.segments.length - 1];
+        const zigzag = (Math.random() - 0.5) * 1.5;
+        const stepLen = 8 + Math.random() * 12;
+        v.segments.push({
+          x: last.x + Math.cos(v.angle + zigzag) * stepLen,
+          y: last.y + Math.sin(v.angle + zigzag) * stepLen,
+        });
+      }
+    }
+  }
+
   // Update beam lines
   for (let i = beamLines.length - 1; i >= 0; i--) {
     beamLines[i].life--;
@@ -1852,22 +2011,22 @@ function update() {
     }
   }
 
-  // ── Thunder (random strikes every 3s) ──
+  // ── Thunder (random strikes every 3s) — with full visual + SFX ──
   if (game.activeSuperRares.includes('thunder')) {
     game.thunderTimer--;
     if (game.thunderTimer <= 0) {
       game.thunderTimer = 180; // 3s
-      // Strike random enemy
       if (enemies.length > 0) {
         const target = enemies[Math.floor(Math.random() * enemies.length)];
         target.hp -= weapon.damage * 4;
         target.hitFlash = 15;
-        spawnParticles(target.x, target.y, 25, '#ffff44', 4);
-        chainArcs.push({ x1: target.x, y1: target.y - 100, x2: target.x, y2: target.y, life: 15 });
-        if (target.hp <= 0) {
-          const idx = enemies.indexOf(target);
-          if (idx >= 0) onEnemyKill(target, idx);
-        }
+        // Lightning bolt visual — from sky to target
+        chainArcs.push({ x1: target.x, y1: target.y - 200, x2: target.x + (Math.random()-0.5)*30, y2: target.y, life: 15 });
+        chainArcs.push({ x1: target.x + (Math.random()-0.5)*15, y1: target.y - 150, x2: target.x, y2: target.y, life: 12 });
+        spawnParticles(target.x, target.y, 20, '#ffff88', 5);
+        spawnParticles(target.x, target.y, 10, '#ffffff', 3);
+        game.lightningFlash = 6;
+        Sound.thunder();
       }
     }
   }
@@ -1993,6 +2152,9 @@ function update() {
           player.invincible = 30;
           game.damageFlash = 8;
           game.shakeTimer = 4;
+          game.hitDirX = l.x - player.x;
+          game.hitDirY = l.y - player.y;
+          Sound.hit();
           spawnParticles(player.x, player.y, 6, '#ff2266', 2);
           lasers.splice(i, 1);
         }
@@ -2022,6 +2184,8 @@ function update() {
         player.invincible = 60;
         game.damageFlash = 12;
         game.shakeTimer = 8;
+        game.hitDirX = e.x - player.x;
+        game.hitDirY = e.y - player.y;
         Sound.hit();
         spawnParticles(player.x, player.y, 10, COL.playerVisor, 2);
         // Thorns (3x if BLADE STORM combo active)
@@ -2039,6 +2203,9 @@ function update() {
 
   // Update enemies
   for (const e of enemies) {
+    // Emergence animation — skip movement while emerging
+    if (e.emergeTimer > 0) { e.emergeTimer--; e.animTimer++; continue; }
+
     // Slow effect
     if (e.slowTimer > 0) {
       e.slowTimer--;
@@ -2353,7 +2520,7 @@ function update() {
         while (game.xp >= game.xpToLevel) {
           game.xp -= game.xpToLevel;
           game.level++;
-          game.xpToLevel = Math.floor(game.xpToLevel * 1.4);
+          game.xpToLevel = Math.floor(game.xpToLevel * 1.15);
           game.pendingLevelUps++;
         }
         // Open first level up if not already in a selection
@@ -2548,7 +2715,11 @@ function onEnemyKill(e: Enemy, index: number) {
   spawnParticles(e.x, e.y, isSuperBoss ? 30 : 10, deathGlow, isSuperBoss ? 5 : 2);
   spawnDrops(e.x, e.y, e.type);
   game.kills++;
-  if (isSuperBoss || isBoss) Sound.bossKill();
+  if (isSuperBoss || isBoss) {
+    Sound.bossKill();
+    game.freezeFrame = isSuperBoss ? 12 : 6; // freeze frames
+    game.freezeZoom = isSuperBoss ? 0.05 : 0.02;
+  }
   else if (e.type === 'exploder') Sound.explosion();
   else Sound.kill();
 
@@ -2688,6 +2859,11 @@ function resetGame() {
   game.skillActive = 0;
   game.dashDx = 0;
   game.dashDy = 0;
+  game.ghostTrail = [];
+  game.freezeFrame = 0;
+  game.freezeZoom = 0;
+  game.lightningTimer = 300 + Math.floor(Math.random() * 300);
+  game.lightningFlash = 0;
 
   weapon.fireRate = 35;
   weapon.speed = 4;
@@ -2715,19 +2891,19 @@ function resetGame() {
   fallingMeteors.length = 0;
   bladeProjs.length = 0;
   beamLines.length = 0;
+  veins.length = 0; // veins will regrow during new game
   spawnTimer = 60;
 }
 
 // ── RENDER ──
-function drawTile(x: number, y: number, tile: number) {
-  const h = (x * 7 + y * 13) & 0xff; // hash for variation
+function drawTile(x: number, y: number, tile: number, wx = 0, wy = 0) {
+  const h = (wx * 7 + wy * 13) & 0xff; // hash based on WORLD coords, stable
   switch (tile) {
-    case 0: // Void floor — near-black with faint purple veins
+    case 0: // Void floor — clean
       bx.fillStyle = COL.sand1;
       bx.fillRect(x, y, TILE, TILE);
-      // Subtle purple vein cracks
-      if (h & 1) { bx.fillStyle = '#1a1030'; bx.fillRect(x + 3, y + 7, 4, 1); }
-      if (h & 4) { bx.fillStyle = '#150c28'; bx.fillRect(x + 8, y + 3, 1, 5); }
+      // Subtle texture dots
+      if (h & 1) { bx.fillStyle = '#0e0c18'; bx.fillRect(x + (h & 7) + 2, y + 6, 1, 1); }
       break;
     case 1: // Dark stone — slightly lighter with texture
       bx.fillStyle = COL.sand2;
@@ -2736,17 +2912,14 @@ function drawTile(x: number, y: number, tile: number) {
       if (h & 2) bx.fillRect(x + 4, y + 8, 3, 1);
       if (h & 8) bx.fillRect(x + 10, y + 4, 1, 3);
       break;
-    case 2: // Obsidian rock — purple-tinted stone
-      bx.fillStyle = COL.rock1;
+    case 2: // Rough ground — slightly lighter than void, clearly walkable
+      bx.fillStyle = '#0f0d1a';
       bx.fillRect(x, y, TILE, TILE);
-      bx.fillStyle = COL.rock2;
-      bx.fillRect(x + 2, y + 2, 12, 12);
-      // Glowing crack
-      bx.fillStyle = '#2a1840';
-      bx.fillRect(x + 4, y + 10, 8, 1);
-      // Faint purple glow on edges
-      bx.fillStyle = '#301848';
-      bx.fillRect(x + 6, y + 6, 4, 4);
+      // Scattered pebbles/texture
+      bx.fillStyle = '#14121f';
+      if (h & 1) bx.fillRect(x + 3, y + 5, 2, 2);
+      if (h & 2) bx.fillRect(x + 9, y + 10, 3, 1);
+      if (h & 4) bx.fillRect(x + 7, y + 3, 1, 2);
       break;
     case 3: // Void wall — impenetrable darkness
       bx.fillStyle = COL.darkRock;
@@ -2822,6 +2995,30 @@ function drawPlayer(sx: number, sy: number) {
 
 function drawEnemy(e: Enemy, sx: number, sy: number) {
   const px = Math.floor(sx), py = Math.floor(sy);
+
+  // Emergence animation — dark fissure opening
+  if (e.emergeTimer > 0) {
+    const progress = 1 - e.emergeTimer / 30; // 0→1
+    const fissureW = 6 + progress * 8;
+    const fissureH = 2 + progress * 4;
+    // Dark crack
+    bx.fillStyle = '#000000';
+    bx.fillRect(px - fissureW / 2, py - fissureH / 2, fissureW, fissureH);
+    // Purple glow from inside
+    bx.globalCompositeOperation = 'lighter';
+    bx.fillStyle = '#441166';
+    bx.globalAlpha = progress * 0.5;
+    bx.fillRect(px - fissureW / 2 + 1, py - fissureH / 2, fissureW - 2, fissureH);
+    // Rising tendrils
+    if (progress > 0.5) {
+      bx.fillStyle = '#220044';
+      bx.globalAlpha = (progress - 0.5) * 0.6;
+      bx.fillRect(px - 1, py - fissureH - progress * 6, 2, progress * 6);
+    }
+    bx.globalAlpha = 1;
+    bx.globalCompositeOperation = 'source-over';
+    return;
+  }
 
   if (e.type === 'superboss') { drawSuperBoss(e, px, py); return; }
   if (e.type === 'boss') { drawBoss(e, px, py); return; }
@@ -3257,6 +3454,38 @@ function render() {
   bx.fillStyle = COL.sky;
   bx.fillRect(0, 0, VIEW_W, VIEW_H);
 
+  // ══ FISSURES — growing cracks, drawn BEFORE tiles ══
+  const fissurePulse = Math.sin(game.time * 0.02) * 0.3 + 0.6;
+  for (const vein of veins) {
+    if (vein.segments.length < 2) continue;
+    let visible = false;
+    for (const p of vein.segments) {
+      const vsx = p.x - camX, vsy = p.y - camY;
+      if (vsx > -40 && vsx < VIEW_W + 40 && vsy > -40 && vsy < VIEW_H + 40) { visible = true; break; }
+    }
+    if (!visible) continue;
+    const totalSegs = vein.segments.length - 1;
+    for (let i = 0; i < totalSegs; i++) {
+      const t = i / Math.max(1, vein.targetLen); // based on target, not current
+      const x1 = vein.segments[i].x - camX, y1 = vein.segments[i].y - camY;
+      const x2 = vein.segments[i + 1].x - camX, y2 = vein.segments[i + 1].y - camY;
+      const width = Math.max(1, vein.width * (1 - t));
+      // Dark crack
+      bx.strokeStyle = '#000000';
+      bx.globalAlpha = 0.7;
+      bx.lineWidth = width + 1;
+      bx.beginPath(); bx.moveTo(x1, y1); bx.lineTo(x2, y2); bx.stroke();
+      // Fire glow
+      bx.globalCompositeOperation = 'lighter';
+      bx.strokeStyle = t < 0.4 ? '#ff3300' : '#ff5500';
+      bx.globalAlpha = (0.25 + fissurePulse * 0.3) * (1 - t * 0.6);
+      bx.lineWidth = width;
+      bx.beginPath(); bx.moveTo(x1, y1); bx.lineTo(x2, y2); bx.stroke();
+      bx.globalCompositeOperation = 'source-over';
+    }
+    bx.globalAlpha = 1; bx.lineWidth = 1;
+  }
+
   // Tiles
   const startTX = Math.floor(camX / TILE);
   const startTY = Math.floor(camY / TILE);
@@ -3265,8 +3494,113 @@ function render() {
   for (let ty = startTY; ty <= endTY; ty++)
     for (let tx = startTX; tx <= endTX; tx++) {
       if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) continue;
-      drawTile(tx * TILE - camX, ty * TILE - camY, map[ty][tx]);
+      drawTile(tx * TILE - camX, ty * TILE - camY, map[ty][tx], tx, ty);
     }
+
+  // (fissures drawn before tiles — see above)
+
+  // ══ WALL EYES — massive eyes in wall clusters that follow the player ══
+  for (const we of wallEyes) {
+    const sz = (we as any).size || 20;
+    const esx = we.x - camX, esy = we.y - camY;
+    if (esx < -sz * 2 || esx > VIEW_W + sz * 2 || esy < -sz * 2 || esy > VIEW_H + sz * 2) continue;
+
+    // Pupil tracks player
+    const edx = player.x - we.x, edy = player.y - we.y;
+    const ed = Math.sqrt(edx * edx + edy * edy);
+    const maxLook = sz * 0.2;
+    const lookX = ed > 0 ? (edx / ed) * maxLook : 0;
+    const lookY = ed > 0 ? (edy / ed) * maxLook * 0.6 : 0;
+
+    const ex = Math.floor(esx), ey = Math.floor(esy);
+    // Blinking — eye closes and opens slowly
+    const blinkCycle = Math.sin(game.time * 0.008 + we.x * 0.3 + we.y * 0.7);
+    const blinkPhase = blinkCycle > 0.85 ? (1 - (blinkCycle - 0.85) / 0.15) : 1; // 0→1, 0=closed
+    if (blinkPhase < 0.05) continue; // fully closed, skip drawing
+
+    const eyeW = sz, eyeH = sz * 0.65 * blinkPhase; // taller = more open
+    const pupilR = sz * 0.25;
+
+    // Eye socket — dark void
+    bx.fillStyle = '#000000';
+    bx.beginPath();
+    bx.ellipse(ex, ey, eyeW + 2, eyeH + 2, 0, 0, Math.PI * 2);
+    bx.fill();
+
+    // Eye shape — pointed at corners (almond shape)
+    bx.save();
+    bx.beginPath();
+    bx.moveTo(ex - eyeW, ey);
+    bx.quadraticCurveTo(ex, ey - eyeH, ex + eyeW, ey);
+    bx.quadraticCurveTo(ex, ey + eyeH, ex - eyeW, ey);
+    bx.closePath();
+    bx.clip();
+
+    // Iris — dark red fill
+    bx.fillStyle = '#1a0810';
+    bx.fillRect(ex - eyeW, ey - eyeH, eyeW * 2, eyeH * 2);
+
+    // Blood vessel veins in the eye
+    bx.strokeStyle = '#330815';
+    bx.globalAlpha = 0.4;
+    bx.lineWidth = 1;
+    for (let v = 0; v < 6; v++) {
+      const va = (v / 6) * Math.PI * 2;
+      bx.beginPath();
+      bx.moveTo(ex + Math.cos(va) * pupilR * 1.5, ey + Math.sin(va) * pupilR);
+      bx.lineTo(ex + Math.cos(va) * eyeW * 0.8, ey + Math.sin(va) * eyeH * 0.8);
+      bx.stroke();
+    }
+    bx.globalAlpha = 1;
+
+    // Iris circle (dark red/maroon)
+    bx.globalCompositeOperation = 'lighter';
+    bx.fillStyle = '#441122';
+    bx.globalAlpha = 0.5;
+    bx.beginPath();
+    bx.arc(ex + lookX, ey + lookY, pupilR * 1.8, 0, Math.PI * 2);
+    bx.fill();
+
+    // Pupil (slit, follows player)
+    bx.fillStyle = '#ff2244';
+    bx.globalAlpha = 0.7;
+    bx.beginPath();
+    bx.ellipse(ex + lookX, ey + lookY, pupilR * 0.4, pupilR, 0, 0, Math.PI * 2);
+    bx.fill();
+
+    // Hot center of pupil
+    bx.fillStyle = '#ff4466';
+    bx.globalAlpha = 0.5;
+    bx.beginPath();
+    bx.ellipse(ex + lookX, ey + lookY, pupilR * 0.2, pupilR * 0.6, 0, 0, Math.PI * 2);
+    bx.fill();
+
+    // Glint
+    bx.fillStyle = '#ffffff';
+    bx.globalAlpha = 0.25;
+    bx.beginPath();
+    bx.arc(ex + lookX - pupilR * 0.3, ey + lookY - pupilR * 0.4, pupilR * 0.15, 0, Math.PI * 2);
+    bx.fill();
+
+    bx.globalAlpha = 1;
+    bx.globalCompositeOperation = 'source-over';
+    bx.restore();
+
+    // Eye outline glow
+    bx.globalCompositeOperation = 'lighter';
+    bx.strokeStyle = '#ff2244';
+    bx.globalAlpha = 0.12 + Math.sin(game.time * 0.02 + we.x) * 0.06;
+    bx.lineWidth = 2;
+    bx.beginPath();
+    bx.moveTo(ex - eyeW, ey);
+    bx.quadraticCurveTo(ex, ey - eyeH, ex + eyeW, ey);
+    bx.quadraticCurveTo(ex, ey + eyeH, ex - eyeW, ey);
+    bx.closePath();
+    bx.stroke();
+    bx.globalAlpha = 1;
+    bx.lineWidth = 1;
+    bx.globalCompositeOperation = 'source-over';
+  }
 
   // Chests
   for (const ch of chests) {
@@ -3350,6 +3684,19 @@ function render() {
         bx.fillStyle = '#22aa22';
         bx.fillRect(ptx - 2, pty - 2, 4, 4);
       }
+      bx.globalAlpha = 1;
+    }
+  }
+
+  // Ghost trail (afterimages)
+  for (const g of game.ghostTrail) {
+    const gx = g.x - camX, gy = g.y - camY;
+    const alpha = Math.max(0, 0.25 - g.age * 0.01);
+    if (alpha > 0) {
+      bx.globalAlpha = alpha;
+      bx.fillStyle = COL.playerVisor;
+      bx.fillRect(Math.floor(gx) - 4, Math.floor(gy) - 5, 8, 10);
+      bx.fillRect(Math.floor(gx) - 3, Math.floor(gy) - 8, 6, 5);
       bx.globalAlpha = 1;
     }
   }
@@ -3549,43 +3896,82 @@ function render() {
   bx.lineWidth = 1;
   bx.globalCompositeOperation = 'source-over';
 
-  // ══ FALLING METEORS visual — shadow + incoming rock ══
+  // ══ FALLING METEORS visual — proper fireball from sky ══
   for (const fm of fallingMeteors) {
     const mx = fm.x - camX, my = fm.y - camY;
-    if (mx < -80 || mx > VIEW_W + 80 || my < -80 || my > VIEW_H + 80) continue;
-    const t = fm.fallTimer / 90; // 1→0 as it approaches
+    if (mx < -100 || mx > VIEW_W + 100 || my < -200 || my > VIEW_H + 100) continue;
+    const maxFall = Math.max(50, fm.fallTimer + 1);
+    const t = fm.fallTimer / maxFall; // 1→0 as it approaches
 
-    // Ground shadow (grows as meteor approaches)
-    const shadowSize = fm.radius * (1 - t * 0.7);
+    // Ground shadow (grows + darkens as meteor approaches)
+    const shadowSize = fm.radius * (1 - t * 0.6);
     bx.fillStyle = '#000000';
-    bx.globalAlpha = 0.3 * (1 - t);
+    bx.globalAlpha = 0.4 * (1 - t);
     bx.beginPath();
-    bx.ellipse(Math.floor(mx), Math.floor(my), shadowSize, shadowSize * 0.5, 0, 0, Math.PI * 2);
+    bx.ellipse(Math.floor(mx), Math.floor(my) + 2, shadowSize, shadowSize * 0.4, 0, 0, Math.PI * 2);
+    bx.fill();
+    bx.globalAlpha = 1;
+
+    // Warning ring — pulsing, shrinking
+    bx.strokeStyle = '#ff2200';
+    bx.globalAlpha = (1 - t) * 0.5 + Math.sin(game.time * 0.25) * 0.2;
+    bx.lineWidth = 1 + (1 - t) * 2;
+    bx.beginPath();
+    bx.arc(Math.floor(mx), Math.floor(my), fm.radius * t + fm.radius * 0.2, 0, Math.PI * 2);
+    bx.stroke();
+    // Inner fill
+    bx.fillStyle = '#ff2200';
+    bx.globalAlpha = (1 - t) * 0.08;
+    bx.beginPath();
+    bx.arc(Math.floor(mx), Math.floor(my), fm.radius, 0, Math.PI * 2);
     bx.fill();
 
-    // Warning circle
-    bx.strokeStyle = '#ff4400';
-    bx.globalAlpha = (1 - t) * 0.6 + Math.sin(game.time * 0.2) * 0.2;
-    bx.lineWidth = 2;
-    bx.beginPath();
-    bx.arc(Math.floor(mx), Math.floor(my), fm.radius * t + fm.radius * 0.3, 0, Math.PI * 2);
-    bx.stroke();
+    // ── The fireball itself ──
+    const rockY = my - 180 * t; // falls from 180px above
+    const rockSize = 5 + (1 - t) * 12; // grows as it approaches
 
-    // Falling rock from above
-    const rockY = my - 150 * t; // falls from 150px above
-    const rockSize = 6 + (1 - t) * 10;
     bx.globalCompositeOperation = 'lighter';
-    // Fire trail
-    bx.fillStyle = '#ff4400';
-    bx.globalAlpha = 0.6 * (1 - t);
-    bx.fillRect(mx - rockSize * 0.5, rockY - rockSize * 2, rockSize, rockSize * 3);
-    bx.fillStyle = '#ffaa00';
-    bx.globalAlpha = 0.4 * (1 - t);
-    bx.fillRect(mx - rockSize * 0.3, rockY - rockSize, rockSize * 0.6, rockSize * 2);
-    // Rock core
-    bx.fillStyle = '#ffcc44';
+
+    // Outer fire trail (long, wide, fading)
+    const trailLen = 40 + (1 - t) * 30;
+    bx.fillStyle = '#ff2200';
+    bx.globalAlpha = 0.3 * (1 - t * 0.5);
+    bx.beginPath();
+    bx.ellipse(Math.floor(mx), Math.floor(rockY) - trailLen * 0.4, rockSize * 0.8, trailLen, 0, 0, Math.PI * 2);
+    bx.fill();
+
+    // Mid fire glow
+    bx.fillStyle = '#ff6600';
+    bx.globalAlpha = 0.5 * (1 - t * 0.3);
+    bx.beginPath();
+    bx.arc(Math.floor(mx), Math.floor(rockY), rockSize * 1.5, 0, Math.PI * 2);
+    bx.fill();
+
+    // Inner fire
+    bx.fillStyle = '#ffaa22';
+    bx.globalAlpha = 0.7;
+    bx.beginPath();
+    bx.arc(Math.floor(mx), Math.floor(rockY), rockSize, 0, Math.PI * 2);
+    bx.fill();
+
+    // White hot core
+    bx.fillStyle = '#ffeeaa';
     bx.globalAlpha = 0.9;
-    bx.fillRect(mx - rockSize * 0.5, rockY - rockSize * 0.5, rockSize, rockSize);
+    bx.beginPath();
+    bx.arc(Math.floor(mx), Math.floor(rockY), rockSize * 0.5, 0, Math.PI * 2);
+    bx.fill();
+
+    // Sparks flying off
+    if ((1 - t) > 0.3) {
+      for (let sp = 0; sp < 3; sp++) {
+        const sa = Math.random() * Math.PI * 2;
+        const sr = rockSize + Math.random() * 8;
+        bx.fillStyle = '#ffcc44';
+        bx.globalAlpha = 0.5 * Math.random();
+        bx.fillRect(mx + Math.cos(sa) * sr, rockY + Math.sin(sa) * sr - Math.random() * 10, 2, 2);
+      }
+    }
+
     bx.globalCompositeOperation = 'source-over';
     bx.globalAlpha = 1;
     bx.lineWidth = 1;
@@ -3754,6 +4140,14 @@ function render() {
     bx.globalCompositeOperation = 'source-over';
   }
 
+  // ══ FOG OF WAR — radial darkness, light from player (before HUD) ══
+  const fogGradPre = bx.createRadialGradient(VIEW_W/2, VIEW_H/2, 90, VIEW_W/2, VIEW_H/2, VIEW_W * 0.52);
+  fogGradPre.addColorStop(0, 'rgba(0,0,0,0)');
+  fogGradPre.addColorStop(0.5, 'rgba(0,0,0,0.25)');
+  fogGradPre.addColorStop(1, 'rgba(0,0,0,0.65)');
+  bx.fillStyle = fogGradPre;
+  bx.fillRect(0, 0, VIEW_W, VIEW_H);
+
   // ── HUD ──
   drawHUD();
 
@@ -3786,18 +4180,57 @@ function render() {
   // Codex overlay (TAB)
   if (game.codexOpen) drawCodex();
 
-  // Damage flash overlay — deep red pulse
+  // Damage flash — directional red indicator
   if (game.damageFlash > 0) {
-    bx.fillStyle = '#440000';
-    bx.globalAlpha = game.damageFlash / 15;
+    const alpha = game.damageFlash / 15;
+    // Light overall tint
+    bx.fillStyle = '#330000';
+    bx.globalAlpha = alpha * 0.5;
     bx.fillRect(0, 0, VIEW_W, VIEW_H);
-    // Red vignette edges on damage
-    bx.fillStyle = '#ff0000';
-    bx.globalAlpha = game.damageFlash / 30;
-    bx.fillRect(0, 0, VIEW_W, 3);
-    bx.fillRect(0, VIEW_H - 3, VIEW_W, 3);
-    bx.fillRect(0, 0, 3, VIEW_H);
-    bx.fillRect(VIEW_W - 3, 0, 3, VIEW_H);
+    // Directional indicator — thick red bar on the side the hit came from
+    const hd = Math.sqrt(game.hitDirX * game.hitDirX + game.hitDirY * game.hitDirY);
+    if (hd > 0) {
+      const nx = game.hitDirX / hd, ny = game.hitDirY / hd;
+      bx.fillStyle = '#ff0000';
+      bx.globalAlpha = alpha * 0.6;
+      const barThick = 6;
+      if (Math.abs(nx) > Math.abs(ny)) {
+        // Hit from left or right
+        if (nx > 0) bx.fillRect(0, 0, barThick, VIEW_H); // hit from left
+        else bx.fillRect(VIEW_W - barThick, 0, barThick, VIEW_H); // hit from right
+      } else {
+        // Hit from top or bottom
+        if (ny > 0) bx.fillRect(0, 0, VIEW_W, barThick); // hit from top
+        else bx.fillRect(0, VIEW_H - barThick, VIEW_W, barThick); // hit from bottom
+      }
+    }
+    bx.globalAlpha = 1;
+  }
+
+  // (fog of war moved before HUD)
+
+  // ══ ASH RAIN — permanent ambient falling particles ══
+  bx.fillStyle = '#332233';
+  for (const ash of ashRain) {
+    ash.y += ash.speed;
+    ash.x += Math.sin(ash.y * 0.01) * 0.2; // gentle sway
+    if (ash.y > VIEW_H) { ash.y = -2; ash.x = Math.random() * VIEW_W; }
+    bx.globalAlpha = ash.alpha;
+    bx.fillRect(Math.floor(ash.x), Math.floor(ash.y), ash.size, ash.size);
+  }
+  bx.globalAlpha = 1;
+
+  // ══ LIGHTNING FLASH ══
+  if (game.lightningFlash > 0) {
+    // First 2 frames = bright white, then fade to purple
+    if (game.lightningFlash > 8) {
+      bx.fillStyle = '#ffffff';
+      bx.globalAlpha = 0.15;
+    } else {
+      bx.fillStyle = '#221133';
+      bx.globalAlpha = game.lightningFlash / 15;
+    }
+    bx.fillRect(0, 0, VIEW_W, VIEW_H);
     bx.globalAlpha = 1;
   }
 
@@ -3847,8 +4280,19 @@ function render() {
   bx.globalAlpha = 1;
   bx.globalCompositeOperation = 'source-over';
 
-  // Upscale
-  ctx.drawImage(buf, 0, 0, VIEW_W, VIEW_H, 0, 0, canvas.width, canvas.height);
+  // Upscale (with freeze zoom effect)
+  if (game.freezeZoom > 0.005) {
+    const z = game.freezeZoom;
+    const zw = VIEW_W * z, zh = VIEW_H * z;
+    ctx.drawImage(buf, 0, 0, VIEW_W, VIEW_H, -zw, -zh, canvas.width + zw * 2, canvas.height + zh * 2);
+    // White flash on freeze
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = game.freezeFrame / 15;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.drawImage(buf, 0, 0, VIEW_W, VIEW_H, 0, 0, canvas.width, canvas.height);
+  }
 }
 
 function drawHUD() {
@@ -4388,8 +4832,10 @@ function drawGameOver() {
 // ── Init & loop ──
 generateMap();
 
+let frameCount = 0;
 function loop() {
-  update();
+  frameCount++;
+  if (frameCount % 2 === 0) update(); // update every other frame = 50% speed
   render();
   requestAnimationFrame(loop);
 }
