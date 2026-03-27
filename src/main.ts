@@ -209,7 +209,7 @@ const UPGRADES: Upgrade[] = [
   {
     id: 'pickup_radius', name: 'MAGNET', desc: 'WIDER PICKUP',
     icon: [[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1]],
-    apply: (lv) => { game.pickupRadius = 16 + lv * 10; game.magnetRadius = 30 + lv * 30; },
+    apply: (lv) => { player.pickupRadius = 16 + lv * 10; player.magnetRadius = 30 + lv * 30; },
   },
   {
     id: 'projectile', name: 'MULTISHOT', desc: 'MORE BULLETS',
@@ -307,11 +307,11 @@ const COMBOS: Combo[] = [
     color: '#44aaff', icon: [[0,1,1,1,0],[1,0,0,0,1],[1,0,1,0,1],[1,0,0,0,1],[0,1,1,1,0]] },
 ];
 
-// Get active combos
-function getActiveCombos(): Combo[] {
+// Get active combos for current player context
+function getActiveCombos(ps: PlayerState = player): Combo[] {
   return COMBOS.filter(c => {
-    const lv1 = game.upgradeLevels.get(c.upgrade1) || 0;
-    const lv2 = game.upgradeLevels.get(c.upgrade2) || 0;
+    const lv1 = ps.upgradeLevels.get(c.upgrade1) || 0;
+    const lv2 = ps.upgradeLevels.get(c.upgrade2) || 0;
     return lv1 >= MAX_UPGRADE_LEVEL && lv2 >= MAX_UPGRADE_LEVEL;
   });
 }
@@ -434,16 +434,109 @@ const SKILLS: Skill[] = [
   },
 ];
 
-// ── Weapon (single, stats modified by upgrades) ──
-const weapon = {
-  fireRate: 35,
-  speed: 4,
-  damage: 1,
-  size: 3,
-  pierce: 0,
-  count: 1,
-  spread: 0,
-};
+// ── PlayerState (per-player state for co-op) ──
+interface PlayerState {
+  // Physical
+  x: number; y: number;
+  hp: number; maxHp: number;
+  speed: number; dir: Dir;
+  shootCooldown: number; invincible: number;
+  animFrame: number; animTimer: number; moving: boolean;
+  // Weapon
+  weapon: { fireRate: number; speed: number; damage: number; size: number; pierce: number; count: number; spread: number; };
+  // Build
+  upgradeLevels: Map<string, number>;
+  activeCombos: string[];
+  activeAffixes: string[];
+  activeSuperRares: string[];
+  activeSkill: Skill | null;
+  skillCooldown: number;
+  skillActive: number;
+  dashDx: number; dashDy: number;
+  // Per-player combo timers
+  bladeStormAngle: number;
+  novaOrbActive: { x: number; y: number; dx: number; dy: number; life: number; maxLife: number } | null;
+  shockwaveTimer: number;
+  meteorTimer: number;
+  carpetBombTimer: number;
+  sniperTimer: number;
+  railgunTimer: number;
+  bulletTimeTimer: number;
+  bulletTimeActive: number;
+  // Per-player visual FX
+  ghostTrail: { x: number; y: number; dir: Dir; age: number }[];
+  damageFlash: number;
+  hitDirX: number; hitDirY: number;
+  orbitalAngle: number;
+  droneAngle: number; droneCount: number;
+  shadowClone: { x: number; y: number; trail: Vec[] } | null;
+  thunderTimer: number;
+  poisonTrails: { x: number; y: number; life: number }[];
+  secondWindUsed: boolean;
+  shieldOrbTimer: number; shieldOrbActive: boolean;
+  magnetPulseTimer: number;
+  novaOnKillChance: number;
+  // XP/Level
+  xp: number; xpToLevel: number; level: number;
+  pendingLevelUps: number;
+  // Pickup
+  pickupRadius: number;
+  magnetRadius: number;
+  // Player identity
+  playerIndex: number; // 0 or 1
+  visorColor: string;
+  dead: boolean;
+}
+
+function createPlayer(index: number): PlayerState {
+  return {
+    x: MAP_W / 2 * TILE + 8 + (index === 1 ? 20 : 0),
+    y: MAP_H / 2 * TILE + 8 + (index === 1 ? 8 : 0),
+    hp: 100, maxHp: 100, speed: 1.5,
+    dir: 'down' as Dir,
+    shootCooldown: 0, invincible: 0,
+    animFrame: 0, animTimer: 0, moving: false,
+    weapon: { fireRate: 35, speed: 4, damage: 1, size: 3, pierce: 0, count: 1, spread: 0 },
+    upgradeLevels: new Map(),
+    activeCombos: [], activeAffixes: [], activeSuperRares: [],
+    activeSkill: null, skillCooldown: 0, skillActive: 0,
+    dashDx: 0, dashDy: 0,
+    bladeStormAngle: 0,
+    novaOrbActive: null,
+    shockwaveTimer: 0, meteorTimer: 0, carpetBombTimer: 0,
+    sniperTimer: 0, railgunTimer: 0,
+    bulletTimeTimer: 0, bulletTimeActive: 0,
+    ghostTrail: [],
+    damageFlash: 0, hitDirX: 0, hitDirY: 0,
+    orbitalAngle: 0,
+    droneAngle: 0, droneCount: 0,
+    shadowClone: null,
+    thunderTimer: 0,
+    poisonTrails: [],
+    secondWindUsed: false,
+    shieldOrbTimer: 0, shieldOrbActive: true,
+    magnetPulseTimer: 0,
+    novaOnKillChance: 0.15,
+    xp: 0, xpToLevel: 10, level: 1,
+    pendingLevelUps: 0,
+    pickupRadius: 16, magnetRadius: 20,
+    playerIndex: index,
+    visorColor: index === 0 ? '#aa66ff' : '#44ddff',
+    dead: false,
+  };
+}
+
+// ── Players array (co-op) ──
+const players: PlayerState[] = [createPlayer(0), createPlayer(1)];
+// Backward-compat aliases — point to "current" player context
+let player = players[0];
+let weapon = players[0].weapon;
+
+// Switch alias context to a specific player
+function setPlayerContext(ps: PlayerState) {
+  player = ps;
+  weapon = ps.weapon;
+}
 
 function getWeaponName(): string {
   if (weapon.damage >= 8) return 'ANNIHILATOR';
@@ -468,21 +561,15 @@ function getWeaponColor(): string {
   return '#ff3333';
 }
 
-// ── Game state ──
+// ── Game state (shared between players) ──
 const game = {
   time: 0,
   state: 'playing' as GameState,
   kills: 0,
-  xp: 0,
-  xpToLevel: 10,
-  level: 1,
   gameOver: false,
   deathScreenTimer: 0,
   won: false,
-  damageFlash: 0,
   shakeTimer: 0,
-  pickupRadius: 16,
-  magnetRadius: 20,
   // Boss/miniboss timers
   miniBossTimer: 30 * FPS,  // first miniboss at 30s
   bossTimer: 60 * FPS,      // first boss at 60s
@@ -492,79 +579,18 @@ const game = {
   superBossTimer: Math.floor(5 * 60 * FPS), // at 5:00
   megaBossSpawned: false,
   // Selection screen
-  pendingLevelUps: 0,
   selectionOptions: [] as (Upgrade | Affix)[],
-  selectionType: '' as 'levelup' | 'chest_common' | 'chest_rare',
+  selectionType: '' as 'levelup' | 'chest_common' | 'chest_rare' | 'skill_select',
   selectionHover: -1,
   selectionDelay: 0,  // frames before clicks are accepted
-  // Upgrade levels
-  upgradeLevels: new Map<string, number>(),
+  selectingPlayer: 0, // which player is currently selecting (0 or 1)
   // Combos
-  activeCombos: [] as string[],
   codexOpen: false,
-  // Active affixes
-  activeAffixes: [] as string[],
-  // Super rares
-  activeSuperRares: [] as string[],
-  // Orbitals
-  orbitalAngle: 0,
-  // Combo ability timers
-  bladeStormAngle: 0,
-  novaOrbActive: null as { x: number; y: number; dx: number; dy: number; life: number; maxLife: number } | null,
-  shockwaveTimer: 0,
-  meteorTimer: 0,
-  carpetBombTimer: 0,
-  sniperTimer: 0,
-  railgunTimer: 0,
-  bulletTimeTimer: 0,
-  bulletTimeActive: 0,
-  // Visual FX
-  ghostTrail: [] as { x: number; y: number; dir: Dir; age: number }[],
+  // Visual FX (shared)
   freezeFrame: 0,       // frames of freeze on boss kill
   freezeZoom: 0,        // zoom amount during freeze
   lightningTimer: 0,    // countdown to next lightning flash
   lightningFlash: 0,
-  hitDirX: 0,           // direction of last damage taken
-  hitDirY: 0,
-  // Drones
-  droneAngle: 0,
-  droneCount: 0,
-  // Shadow clone
-  shadowClone: null as { x: number; y: number; trail: Vec[] } | null,
-  // Thunder
-  thunderTimer: 0,
-  // Poison trail
-  poisonTrails: [] as { x: number; y: number; life: number }[],
-  // Second wind (one-time revive)
-  secondWindUsed: false,
-  // Shield orb
-  shieldOrbTimer: 0, // cooldown timer (counts down from 900)
-  shieldOrbActive: true, // is the shield ready?
-  // Magnet pulse
-  magnetPulseTimer: 0,
-  // Nova on kill
-  novaOnKillChance: 0.15,
-  // Right-click skill
-  activeSkill: null as Skill | null,
-  skillCooldown: 0,
-  skillActive: 0, // active duration (for dash/shield)
-  // Dash state
-  dashDx: 0,
-  dashDy: 0,
-};
-
-const player = {
-  x: MAP_W / 2 * TILE + 8,
-  y: MAP_H / 2 * TILE + 8,
-  hp: 100,
-  maxHp: 100,
-  speed: 1.5,
-  dir: 'down' as Dir,
-  shootCooldown: 0,
-  invincible: 0,
-  animFrame: 0,
-  animTimer: 0,
-  moving: false,
 };
 
 interface Laser {
@@ -763,8 +789,11 @@ function getDifficulty() {
 let spawnTimer = 60;
 
 function findSpawnPos(): Vec | null {
-  const camX = player.x - VIEW_W / 2;
-  const camY = player.y - VIEW_H / 2;
+  const alivePlayers = players.filter(p => !p.dead);
+  const midX = alivePlayers.length > 0 ? alivePlayers.reduce((s, p) => s + p.x, 0) / alivePlayers.length : players[0].x;
+  const midY = alivePlayers.length > 0 ? alivePlayers.reduce((s, p) => s + p.y, 0) / alivePlayers.length : players[0].y;
+  const camX = midX - VIEW_W / 2;
+  const camY = midY - VIEW_H / 2;
   for (let attempt = 0; attempt < 20; attempt++) {
     const side = Math.floor(Math.random() * 4);
     let ex: number, ey: number;
@@ -983,7 +1012,9 @@ function dist2(a: Vec, b: Vec): number {
 // ── Selection screen ──
 const MAX_UPGRADES = 6; // max distinct upgrade types
 
-function openSelection(type: 'levelup' | 'chest_common' | 'chest_rare' | 'skill_select') {
+function openSelection(type: 'levelup' | 'chest_common' | 'chest_rare' | 'skill_select', forPlayerIndex: number = game.selectingPlayer) {
+  game.selectingPlayer = forPlayerIndex;
+  setPlayerContext(players[forPlayerIndex]);
   game.selectionType = type;
   game.selectionHover = -1;
   game.selectionDelay = 20;
@@ -996,13 +1027,14 @@ function openSelection(type: 'levelup' | 'chest_common' | 'chest_rare' | 'skill_
     game.state = 'skill_select';
   } else if (type === 'chest_rare') {
     // Boss chest: affixes + super rares only (no skills)
-    const availableAffixes = AFFIXES.filter(a => !game.activeAffixes.includes(a.id));
-    const availableSuperRares = SUPER_RARES.filter(s => !game.activeSuperRares.includes(s.id));
+    const ps = players[forPlayerIndex];
+    const availableAffixes = AFFIXES.filter(a => !ps.activeAffixes.includes(a.id));
+    const availableSuperRares = SUPER_RARES.filter(s => !ps.activeSuperRares.includes(s.id));
     const allRare = [...availableAffixes, ...availableSuperRares];
 
     if (allRare.length === 0) {
       const fallback = pickRandomUpgrades(3);
-      if (fallback.length === 0) { game.pendingLevelUps = 0; game.state = 'playing'; return; }
+      if (fallback.length === 0) { ps.pendingLevelUps = 0; game.state = 'playing'; return; }
       game.selectionOptions = fallback;
       game.state = 'chest_common';
     } else {
@@ -1013,7 +1045,7 @@ function openSelection(type: 'levelup' | 'chest_common' | 'chest_rare' | 'skill_
     const upgrades = pickRandomUpgrades(3);
     if (upgrades.length === 0) {
       // All upgrades maxed — skip selection, drain pending
-      game.pendingLevelUps = 0;
+      players[forPlayerIndex].pendingLevelUps = 0;
       game.state = 'playing';
       return;
     }
@@ -1023,7 +1055,8 @@ function openSelection(type: 'levelup' | 'chest_common' | 'chest_rare' | 'skill_
 }
 
 function pickRandomUpgrades(n: number): Upgrade[] {
-  const ownedIds = Array.from(game.upgradeLevels.keys());
+  const ps = players[game.selectingPlayer];
+  const ownedIds = Array.from(ps.upgradeLevels.keys());
   const atCap = ownedIds.length >= MAX_UPGRADES;
 
   // Split pool into 3 categories
@@ -1041,7 +1074,7 @@ function pickRandomUpgrades(n: number): Upgrade[] {
   }
 
   for (const u of UPGRADES) {
-    const lv = game.upgradeLevels.get(u.id) || 0;
+    const lv = ps.upgradeLevels.get(u.id) || 0;
     if (lv >= MAX_UPGRADE_LEVEL) continue;
     if (atCap && !ownedIds.includes(u.id)) continue;
 
@@ -1097,52 +1130,61 @@ function selectOption(index: number) {
   if (index < 0 || index >= game.selectionOptions.length) return;
   Sound.select();
   const option = game.selectionOptions[index];
+  const ps = players[game.selectingPlayer];
+  setPlayerContext(ps);
 
   if (isSkill(option)) {
     // Right-click skill
-    game.activeSkill = option;
-    game.skillCooldown = 0;
-    spawnParticles(player.x, player.y, 30, option.color, 4);
+    ps.activeSkill = option;
+    ps.skillCooldown = 0;
+    spawnParticles(ps.x, ps.y, 30, option.color, 4);
   } else if (isSuperRare(option)) {
     // Super rare
-    game.activeSuperRares.push(option.id);
-    spawnParticles(player.x, player.y, 35, option.color, 5);
+    ps.activeSuperRares.push(option.id);
+    spawnParticles(ps.x, ps.y, 35, option.color, 5);
     // Apply immediate effects
-    if (option.id === 'drone') game.droneCount++;
+    if (option.id === 'drone') ps.droneCount++;
     if (option.id === 'shadow_clone') {
-      game.shadowClone = { x: player.x, y: player.y, trail: [] };
+      ps.shadowClone = { x: ps.x, y: ps.y, trail: [] };
     }
-    if (option.id === 'thunder') game.thunderTimer = 180;
-    if (option.id === 'magnet_pulse') game.magnetPulseTimer = 600;
+    if (option.id === 'thunder') ps.thunderTimer = 180;
+    if (option.id === 'magnet_pulse') ps.magnetPulseTimer = 600;
   } else if (isAffix(option)) {
     // Weapon affix
-    game.activeAffixes.push(option.id);
-    spawnParticles(player.x, player.y, 30, option.color, 4);
+    ps.activeAffixes.push(option.id);
+    spawnParticles(ps.x, ps.y, 30, option.color, 4);
   } else {
     // Upgrade
     const upgrade = option as Upgrade;
-    const currentLv = game.upgradeLevels.get(upgrade.id) || 0;
+    const currentLv = ps.upgradeLevels.get(upgrade.id) || 0;
     const newLv = currentLv + 1;
-    game.upgradeLevels.set(upgrade.id, newLv);
+    ps.upgradeLevels.set(upgrade.id, newLv);
     upgrade.apply(newLv);
-    spawnParticles(player.x, player.y, 20, '#8899aa', 3);
+    spawnParticles(ps.x, ps.y, 20, '#8899aa', 3);
   }
 
   game.selectionOptions = [];
 
-  // Check for queued level ups
-  if (game.pendingLevelUps > 0) {
-    game.pendingLevelUps--;
-    openSelection('levelup');
+  // Check for queued level ups for this player
+  if (ps.pendingLevelUps > 0) {
+    ps.pendingLevelUps--;
+    openSelection('levelup', ps.playerIndex);
   } else {
-    game.state = 'playing';
+    // Check if other player has pending level ups
+    const otherPs = players[1 - game.selectingPlayer];
+    if (!otherPs.dead && otherPs.pendingLevelUps > 0) {
+      otherPs.pendingLevelUps--;
+      openSelection('levelup', otherPs.playerIndex);
+    } else {
+      game.state = 'playing';
+    }
   }
 }
 
 // ── Affix effects ──
-function applyAffixOnHit(x: number, y: number, damage: number, hitEnemy: Enemy) {
+function applyAffixOnHit(x: number, y: number, damage: number, hitEnemy: Enemy, ps: PlayerState = player) {
   // Chain lightning
-  if (game.activeAffixes.includes('chain')) {
+  if (ps.activeAffixes.includes('chain')) {
     let lastPos = { x, y };
     let chainsLeft = 2;
     const hit = new Set<Enemy>([hitEnemy]);
@@ -1169,7 +1211,7 @@ function applyAffixOnHit(x: number, y: number, damage: number, hitEnemy: Enemy) 
   }
 
   // Explosion
-  if (game.activeAffixes.includes('explosion')) {
+  if (ps.activeAffixes.includes('explosion')) {
     const aoeRadius = 25;
     spawnParticles(x, y, 15, '#ff6622', 3);
     for (let i = enemies.length - 1; i >= 0; i--) {
@@ -1185,37 +1227,38 @@ function applyAffixOnHit(x: number, y: number, damage: number, hitEnemy: Enemy) 
   }
 
   // Freeze
-  if (game.activeAffixes.includes('freeze') && hitEnemy.hp > 0) {
+  if (ps.activeAffixes.includes('freeze') && hitEnemy.hp > 0) {
     hitEnemy.slowTimer = 120;
   }
 
   // Burn
-  if (game.activeAffixes.includes('burn') && hitEnemy.hp > 0) {
+  if (ps.activeAffixes.includes('burn') && hitEnemy.hp > 0) {
     hitEnemy.burnTimer = 180;
     hitEnemy.burnDamage = Math.max(1, Math.floor(damage * 0.3));
   }
 }
 
 // Central damage handler — applies armor, dodge, iron skin, phantom, fortress
-function damagePlayer(baseDmg: number, fromX: number, fromY: number): boolean {
-  if (player.invincible > 0) return false;
+function damagePlayer(baseDmg: number, fromX: number, fromY: number, ps: PlayerState = player): boolean {
+  if (ps.invincible > 0) return false;
+  if (ps.dead) return false;
 
-  const armorLv = game.upgradeLevels.get('armor') || 0;
-  const dodgeLv = game.upgradeLevels.get('dodge') || 0;
+  const armorLv = ps.upgradeLevels.get('armor') || 0;
+  const dodgeLv = ps.upgradeLevels.get('dodge') || 0;
 
   // Dodge check (5% per level, max 30%)
   if (dodgeLv > 0 && Math.random() < dodgeLv * 0.05) {
     // Dodged!
-    spawnParticles(player.x, player.y, 5, '#8844cc', 2);
+    spawnParticles(ps.x, ps.y, 5, '#8844cc', 2);
     // PHANTOM combo — invisible 2s after dodge
-    if (game.activeCombos.includes('phantom')) {
-      player.invincible = 120; // 2s invincible
-      spawnParticles(player.x, player.y, 10, '#8844cc', 3);
+    if (ps.activeCombos.includes('phantom')) {
+      ps.invincible = 120; // 2s invincible
+      spawnParticles(ps.x, ps.y, 10, '#8844cc', 3);
     }
     // FORTRESS combo — 1s full shield after dodge
-    if (game.activeCombos.includes('fortress')) {
-      player.invincible = Math.max(player.invincible, 60);
-      spawnParticles(player.x, player.y, 10, '#44aaff', 3);
+    if (ps.activeCombos.includes('fortress')) {
+      ps.invincible = Math.max(ps.invincible, 60);
+      spawnParticles(ps.x, ps.y, 10, '#44aaff', 3);
     }
     return false; // no damage
   }
@@ -1224,32 +1267,32 @@ function damagePlayer(baseDmg: number, fromX: number, fromY: number): boolean {
   let dmg = Math.max(1, baseDmg - armorLv);
 
   // IRON SKIN combo — 50% damage reduction + regen tick
-  if (game.activeCombos.includes('iron_skin')) {
+  if (ps.activeCombos.includes('iron_skin')) {
     dmg = Math.max(1, Math.ceil(dmg * 0.5));
     // Small heal on hit
-    player.hp = Math.min(player.hp + 1, player.maxHp);
+    ps.hp = Math.min(ps.hp + 1, ps.maxHp);
   }
 
-  player.hp -= dmg;
-  player.invincible = 60;
-  game.damageFlash = 12;
+  ps.hp -= dmg;
+  ps.invincible = 60;
+  ps.damageFlash = 12;
   game.shakeTimer = 8;
-  game.hitDirX = fromX - player.x;
-  game.hitDirY = fromY - player.y;
+  ps.hitDirX = fromX - ps.x;
+  ps.hitDirY = fromY - ps.y;
   Sound.hit();
-  spawnParticles(player.x, player.y, 10, COL.playerVisor, 2);
+  spawnParticles(ps.x, ps.y, 10, ps.visorColor, 2);
   return true;
 }
 
-function applyAffixOnKill(_x: number, _y: number) {
+function applyAffixOnKill(_x: number, _y: number, ps: PlayerState = player) {
   // Affix life steal
-  if (game.activeAffixes.includes('affix_lifesteal') && Math.random() < 0.15) {
-    player.hp = Math.min(player.hp + 1, player.maxHp);
+  if (ps.activeAffixes.includes('affix_lifesteal') && Math.random() < 0.15) {
+    ps.hp = Math.min(ps.hp + 1, ps.maxHp);
   }
 }
 
-function applyRicochet(hitX: number, hitY: number, damage: number, hitEnemy: Enemy) {
-  if (!game.activeAffixes.includes('ricochet')) return;
+function applyRicochet(hitX: number, hitY: number, damage: number, hitEnemy: Enemy, ps: PlayerState = player) {
+  if (!ps.activeAffixes.includes('ricochet')) return;
   // Find nearest enemy to bounce toward
   let closest: Enemy | null = null;
   let closestDist = 80 * 80;
@@ -1307,254 +1350,237 @@ function update() {
 
   game.time++;
 
-  // Player movement (keyboard + click-to-move)
-  let dx = 0, dy = 0;
-  if (keys['z'] || keys['arrowup']) dy -= 1;
-  if (keys['s'] || keys['arrowdown']) dy += 1;
-  if (keys['q'] || keys['arrowleft']) dx -= 1;
-  if (keys['d'] || keys['arrowright']) dx += 1;
+  // ══ PER-PLAYER UPDATE LOOP ══
+  for (const ps of players) {
+    if (ps.dead) continue;
+    setPlayerContext(ps);
 
-  // Click-to-move: hold left click = move toward cursor
-  if (mouse.down && dx === 0 && dy === 0) {
-    const camX = player.x - VIEW_W / 2;
-    const camY = player.y - VIEW_H / 2;
-    const worldMX = mouse.x + camX;
-    const worldMY = mouse.y + camY;
-    const mdx = worldMX - player.x, mdy = worldMY - player.y;
-    const mdist = Math.sqrt(mdx * mdx + mdy * mdy);
-    if (mdist > 8) { // dead zone to avoid jitter
-      dx = mdx / mdist;
-      dy = mdy / mdist;
-    }
-  }
-
-  player.moving = dx !== 0 || dy !== 0;
-  if (player.moving) {
-    if (dx !== 0 && dy !== 0) {
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len > 0) { dx /= len; dy /= len; }
-    }
-    const mx = dx * player.speed, my = dy * player.speed;
-    if (canMove(player.x, player.y, mx, 0, 5)) player.x += mx;
-    if (canMove(player.x, player.y, 0, my, 5)) player.y += my;
-    if (Math.abs(dx) > Math.abs(dy)) player.dir = dx > 0 ? 'right' : 'left';
-    else player.dir = dy > 0 ? 'down' : 'up';
-  }
-
-  player.animTimer++;
-  // Ghost trail — record position every 4 frames when moving
-  if (player.moving && game.time % 4 === 0) {
-    game.ghostTrail.push({ x: player.x, y: player.y, dir: player.dir, age: 0 });
-    if (game.ghostTrail.length > 8) game.ghostTrail.shift();
-  }
-  for (const g of game.ghostTrail) g.age++;
-  if (player.animTimer > 8) { player.animTimer = 0; player.animFrame = (player.animFrame + 1) % 4; }
-  if (player.invincible > 0) player.invincible--;
-
-  // Auto-shooting toward nearest enemy
-  if (player.shootCooldown > 0) player.shootCooldown--;
-  let autoTarget: Enemy | null = null;
-  let autoTargetDist = 250 * 250; // max auto-aim range
-  for (const e of enemies) {
-    const d = dist2(player, e);
-    if (d < autoTargetDist) { autoTargetDist = d; autoTarget = e; }
-  }
-  if (autoTarget && player.shootCooldown <= 0) {
-    const baseAim = aimDir(player, autoTarget);
-
-    // Combo-aware projectile visuals
-    const hasDR = game.activeCombos.includes('death_ray');
-    const hasCB = game.activeCombos.includes('carpet_bomb');
-    const hasMeteor = game.activeCombos.includes('meteor');
-    const hasSniper = game.activeCombos.includes('sniper');
-    const hasRailgun = game.activeCombos.includes('railgun');
-    const hasBH = game.activeCombos.includes('bullet_hell');
-
-    // Pick color based on most impactful combo
-    const pColor = hasDR ? '#ff2244' : hasMeteor ? '#ff6600' : hasCB ? '#ff8822' :
-                   hasSniper ? '#4488ff' : hasRailgun ? '#88ffff' : hasBH ? '#ffff44' : getWeaponColor();
-    const pGlow = hasDR ? '#ff4466' : hasMeteor ? '#ffaa44' : hasCB ? '#ffaa44' :
-                  hasSniper ? '#88bbff' : hasRailgun ? '#aaffff' : hasBH ? '#ffffaa' : pColor;
-    // Size boost for carpet bomb / meteor
-    const sizeBonus = hasCB ? 3 : hasMeteor ? 2 : 0;
-    // Trail boost for death ray / sniper
-    const trailBonus = hasDR ? 6 : hasSniper ? 5 : hasRailgun ? 4 : 0;
-    // Speed boost for sniper/railgun
-    const speedMult = hasRailgun ? 2.5 : hasSniper ? 1.8 : 1;
-    // Life boost for long range
-    const lifeBonus = hasSniper ? 40 : hasRailgun ? 20 : 0;
-
-    for (let i = 0; i < weapon.count; i++) {
-      let aim = baseAim;
-      if (weapon.count > 1) {
-        const spreadAngle = (i - (weapon.count - 1) / 2) * weapon.spread;
-        aim = rotateVec(baseAim, spreadAngle);
+    // Player movement
+    let dx = 0, dy = 0;
+    if (ps.playerIndex === 0) {
+      // P1: ZQSD + mouse click-to-move
+      if (keys['z']) dy -= 1;
+      if (keys['s']) dy += 1;
+      if (keys['q']) dx -= 1;
+      if (keys['d']) dx += 1;
+      // Click-to-move: hold left click = move toward cursor
+      if (mouse.down && dx === 0 && dy === 0) {
+        const alivePlayers = players.filter(p => !p.dead);
+        const midX = alivePlayers.reduce((s, p) => s + p.x, 0) / alivePlayers.length;
+        const midY = alivePlayers.reduce((s, p) => s + p.y, 0) / alivePlayers.length;
+        const camXM = midX - VIEW_W / 2;
+        const camYM = midY - VIEW_H / 2;
+        const worldMX = mouse.x + camXM;
+        const worldMY = mouse.y + camYM;
+        const mdx = worldMX - ps.x, mdy = worldMY - ps.y;
+        const mdist = Math.sqrt(mdx * mdx + mdy * mdy);
+        if (mdist > 8) { dx = mdx / mdist; dy = mdy / mdist; }
       }
-      lasers.push({
-        x: player.x, y: player.y,
-        dx: aim.x * weapon.speed * speedMult, dy: aim.y * weapon.speed * speedMult,
-        life: 60 + lifeBonus, fromPlayer: true,
-        damage: weapon.damage, size: weapon.size + sizeBonus,
-        pierce: weapon.pierce, pierceHit: new Set(),
-        color: pColor, glowColor: pGlow,
-        trailLength: Math.min(8, 1 + Math.floor(weapon.damage / 2) + trailBonus),
-      });
+    } else {
+      // P2: arrow keys
+      if (keys['arrowup']) dy -= 1;
+      if (keys['arrowdown']) dy += 1;
+      if (keys['arrowleft']) dx -= 1;
+      if (keys['arrowright']) dx += 1;
     }
-    // Muzzle flash — bigger with combos
-    const flashSize = (hasDR || hasCB || hasMeteor) ? 6 : 3;
-    spawnParticles(player.x + baseAim.x * 6, player.y + baseAim.y * 6, flashSize, pColor, 2);
-    player.shootCooldown = weapon.fireRate;
-    Sound.shoot();
-  }
 
-  // Orbital
-  const orbitalLv = game.upgradeLevels.get('orbital') || 0;
-  if (orbitalLv > 0) {
-    game.orbitalAngle += 0.05;
-    // Spawn orbital projectiles every 20 frames
-    if (game.time % 20 === 0) {
-      for (let i = 0; i < orbitalLv; i++) {
-        const angle = game.orbitalAngle + (i / orbitalLv) * Math.PI * 2;
-        const ox = player.x + Math.cos(angle) * 30;
-        const oy = player.y + Math.sin(angle) * 30;
+    ps.moving = dx !== 0 || dy !== 0;
+    if (ps.moving) {
+      if (dx !== 0 && dy !== 0) {
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len > 0) { dx /= len; dy /= len; }
+      }
+      const mx = dx * ps.speed, my = dy * ps.speed;
+      if (canMove(ps.x, ps.y, mx, 0, 5)) ps.x += mx;
+      if (canMove(ps.x, ps.y, 0, my, 5)) ps.y += my;
+      if (Math.abs(dx) > Math.abs(dy)) ps.dir = dx > 0 ? 'right' : 'left';
+      else ps.dir = dy > 0 ? 'down' : 'up';
+    }
+
+    ps.animTimer++;
+    // Ghost trail — record position every 4 frames when moving
+    if (ps.moving && game.time % 4 === 0) {
+      ps.ghostTrail.push({ x: ps.x, y: ps.y, dir: ps.dir, age: 0 });
+      if (ps.ghostTrail.length > 8) ps.ghostTrail.shift();
+    }
+    for (const g of ps.ghostTrail) g.age++;
+    if (ps.animTimer > 8) { ps.animTimer = 0; ps.animFrame = (ps.animFrame + 1) % 4; }
+    if (ps.invincible > 0) ps.invincible--;
+    if (ps.damageFlash > 0) ps.damageFlash--;
+
+    // Auto-shooting toward nearest enemy
+    if (ps.shootCooldown > 0) ps.shootCooldown--;
+    let autoTarget: Enemy | null = null;
+    let autoTargetDist = 250 * 250; // max auto-aim range
+    for (const e of enemies) {
+      const d = dist2(ps, e);
+      if (d < autoTargetDist) { autoTargetDist = d; autoTarget = e; }
+    }
+    if (autoTarget && ps.shootCooldown <= 0) {
+      const baseAim = aimDir(ps, autoTarget);
+
+      // Combo-aware projectile visuals
+      const hasDR = ps.activeCombos.includes('death_ray');
+      const hasCB = ps.activeCombos.includes('carpet_bomb');
+      const hasMeteor = ps.activeCombos.includes('meteor');
+      const hasSniper = ps.activeCombos.includes('sniper');
+      const hasRailgun = ps.activeCombos.includes('railgun');
+      const hasBH = ps.activeCombos.includes('bullet_hell');
+
+      const pColor = hasDR ? '#ff2244' : hasMeteor ? '#ff6600' : hasCB ? '#ff8822' :
+                     hasSniper ? '#4488ff' : hasRailgun ? '#88ffff' : hasBH ? '#ffff44' : getWeaponColor();
+      const pGlow = hasDR ? '#ff4466' : hasMeteor ? '#ffaa44' : hasCB ? '#ffaa44' :
+                    hasSniper ? '#88bbff' : hasRailgun ? '#aaffff' : hasBH ? '#ffffaa' : pColor;
+      const sizeBonus = hasCB ? 3 : hasMeteor ? 2 : 0;
+      const trailBonus = hasDR ? 6 : hasSniper ? 5 : hasRailgun ? 4 : 0;
+      const speedMult = hasRailgun ? 2.5 : hasSniper ? 1.8 : 1;
+      const lifeBonus = hasSniper ? 40 : hasRailgun ? 20 : 0;
+
+      for (let i = 0; i < weapon.count; i++) {
+        let aim = baseAim;
+        if (weapon.count > 1) {
+          const spreadAngle = (i - (weapon.count - 1) / 2) * weapon.spread;
+          aim = rotateVec(baseAim, spreadAngle);
+        }
         lasers.push({
-          x: ox, y: oy,
-          dx: Math.cos(angle + Math.PI / 2) * 2,
-          dy: Math.sin(angle + Math.PI / 2) * 2,
-          life: 15, fromPlayer: true,
-          damage: Math.max(1, Math.floor(weapon.damage * 0.5)),
-          size: 2, pierce: 0, pierceHit: new Set(),
-          color: '#aaaaff', glowColor: '#ccccff', trailLength: 1,
+          x: ps.x, y: ps.y,
+          dx: aim.x * weapon.speed * speedMult, dy: aim.y * weapon.speed * speedMult,
+          life: 60 + lifeBonus, fromPlayer: true,
+          damage: weapon.damage, size: weapon.size + sizeBonus,
+          pierce: weapon.pierce, pierceHit: new Set(),
+          color: pColor, glowColor: pGlow,
+          trailLength: Math.min(8, 1 + Math.floor(weapon.damage / 2) + trailBonus),
         });
       }
+      const flashSize = (hasDR || hasCB || hasMeteor) ? 6 : 3;
+      spawnParticles(ps.x + baseAim.x * 6, ps.y + baseAim.y * 6, flashSize, pColor, 2);
+      ps.shootCooldown = weapon.fireRate;
+      Sound.shoot();
     }
-  }
 
-  // ── Check combos ──
-  game.activeCombos = getActiveCombos().map(c => c.id);
-
-  // Combo: BULLET TIME — slow enemies every 15s
-  if (game.activeCombos.includes('bullet_time') && game.time % (15 * FPS) === 0) {
-    for (const e of enemies) {
-      e.slowTimer = Math.max(e.slowTimer, 180); // 3s slow
-    }
-    spawnParticles(player.x, player.y, 20, '#aaccff', 3);
-  }
-
-  // Combo: WARP FIELD — permanent magnet for all drops
-  if (game.activeCombos.includes('warp_field')) {
-    for (const dr of drops) {
-      const ddx = player.x - dr.x, ddy = player.y - dr.y;
-      const ddist = Math.sqrt(ddx * ddx + ddy * ddy);
-      if (ddist > 2) {
-        dr.x += (ddx / ddist) * 3;
-        dr.y += (ddy / ddist) * 3;
+    // Orbital
+    const orbitalLv = ps.upgradeLevels.get('orbital') || 0;
+    if (orbitalLv > 0) {
+      ps.orbitalAngle += 0.05;
+      if (game.time % 20 === 0) {
+        for (let i = 0; i < orbitalLv; i++) {
+          const angle = ps.orbitalAngle + (i / orbitalLv) * Math.PI * 2;
+          const ox = ps.x + Math.cos(angle) * 30;
+          const oy = ps.y + Math.sin(angle) * 30;
+          lasers.push({
+            x: ox, y: oy,
+            dx: Math.cos(angle + Math.PI / 2) * 2,
+            dy: Math.sin(angle + Math.PI / 2) * 2,
+            life: 15, fromPlayer: true,
+            damage: Math.max(1, Math.floor(weapon.damage * 0.5)),
+            size: 2, pierce: 0, pierceHit: new Set(),
+            color: '#aaaaff', glowColor: '#ccccff', trailLength: 1,
+          });
+        }
       }
     }
-  }
 
-  // ══ COMBO ABILITIES (periodic, massive, screen-filling) ══
-  // Universal stat helpers
-  const uMulti = weapon.count;             // multishot level (1+)
-  const uCaliber = weapon.size;            // caliber (3+)
-  const uFireRate = game.upgradeLevels.get('fire_rate') || 0;
-  const uVelocity = weapon.speed;          // velocity (4+)
-  const uDmg = weapon.damage;              // damage (1+)
-  const uPierce = weapon.pierce;           // pierce (0+)
-  const uLeech = game.upgradeLevels.get('life_steal') || 0;
-  const uThorns = game.upgradeLevels.get('thorns') || 0;
-  const uOrbital = game.upgradeLevels.get('orbital') || 0;
-  const uSpeed = player.speed;             // move speed
-  const uVitality = game.upgradeLevels.get('max_hp') || 0;
-  const uMagnet = game.upgradeLevels.get('pickup_radius') || 0;
+    // ── Check combos for this player ──
+    ps.activeCombos = getActiveCombos(ps).map(c => c.id);
 
-  // Combo heal helper (leech heals on combo kills)
-  function comboHeal(amount: number) {
-    if (uLeech > 0 && Math.random() < uLeech * 0.03) {
-      player.hp = Math.min(player.hp + amount, player.maxHp + (game.activeCombos.includes('second_life') ? 30 + uVitality * 5 : 0));
-      spawnParticles(player.x, player.y, 2, '#44ff44', 1);
-    }
-  }
-
-  // BLADE STORM — ALL stats scale
-  if (game.activeCombos.includes('blade_storm')) {
-    const bladeFreq = Math.max(20, 90 - uFireRate * 8);
-    if (game.time % bladeFreq === 0) {
-      const swordCount = 4 + uMulti + uOrbital; // multishot + orbital bonus
-      const bladeSpeed = 3 + uVelocity * 0.3 + uSpeed * 0.3;
-      for (let s = 0; s < swordCount; s++) {
-        const spreadAngle = (s / swordCount) * Math.PI * 2 + game.time * 0.01 + uSpeed * 0.1;
-        bladeProjs.push({
-          x: player.x, y: player.y,
-          dx: Math.cos(spreadAngle) * bladeSpeed, dy: Math.sin(spreadAngle) * bladeSpeed,
-          life: 60 + uPierce * 12 + uVelocity * 3, angle: spreadAngle,
-        });
-      }
-      spawnParticles(player.x, player.y, 12, '#ff4488', 3);
-    }
-  }
-  // Update blade projectiles
-  for (let i = bladeProjs.length - 1; i >= 0; i--) {
-    const bp = bladeProjs[i];
-    bp.x += bp.dx; bp.y += bp.dy;
-    bp.angle += 0.3; // spin like a helicopter
-    bp.life--;
-    if (bp.life <= 0) { bladeProjs.splice(i, 1); continue; }
-    const bladeHitR = 16 + uCaliber * 2 + uMagnet;
-    for (const e of enemies) {
-      if (e.hp <= 0) continue;
-      if (dist2(bp, e) < bladeHitR * bladeHitR) {
-        const bladeDmg = Math.max(2, uDmg * 3 + uThorns * 2);
-        e.hp -= bladeDmg;
-        e.hitFlash = 6;
-        comboHeal(1);
-      }
-    }
-  }
-
-  // NOVA PULSE — BLACK HOLE: travels to target, stops, grows for 4s, implodes
-  if (game.activeCombos.includes('nova_pulse')) {
-    const novaFreq = Math.max(4 * FPS, 10 * FPS - uFireRate * 25);
-    if (!game.novaOrbActive && game.time % novaFreq === 0 && enemies.length > 0) {
-      // Find densest enemy cluster near player
-      let bestX = player.x, bestY = player.y, bestCount = 0;
+    // Combo: BULLET TIME — slow enemies every 15s
+    if (ps.activeCombos.includes('bullet_time') && game.time % (15 * FPS) === 0) {
       for (const e of enemies) {
-        if (dist2(player, e) > 200 * 200) continue;
+        e.slowTimer = Math.max(e.slowTimer, 180);
+      }
+      spawnParticles(ps.x, ps.y, 20, '#aaccff', 3);
+    }
+
+    // Combo: WARP FIELD — permanent magnet for all drops
+    if (ps.activeCombos.includes('warp_field')) {
+      for (const dr of drops) {
+        const ddx = ps.x - dr.x, ddy = ps.y - dr.y;
+        const ddist = Math.sqrt(ddx * ddx + ddy * ddy);
+        if (ddist > 2) {
+          dr.x += (ddx / ddist) * 3;
+          dr.y += (ddy / ddist) * 3;
+        }
+      }
+    }
+
+    // ══ COMBO ABILITIES (periodic, massive, screen-filling) ══
+    const uMulti = weapon.count;
+    const uCaliber = weapon.size;
+    const uFireRate = ps.upgradeLevels.get('fire_rate') || 0;
+    const uVelocity = weapon.speed;
+    const uDmg = weapon.damage;
+    const uPierce = weapon.pierce;
+    const uLeech = ps.upgradeLevels.get('life_steal') || 0;
+    const uThorns = ps.upgradeLevels.get('thorns') || 0;
+    const uOrbital = ps.upgradeLevels.get('orbital') || 0;
+    const uSpeed = ps.speed;
+    const uVitality = ps.upgradeLevels.get('max_hp') || 0;
+    const uMagnet = ps.upgradeLevels.get('pickup_radius') || 0;
+
+    // Combo heal helper (leech heals on combo kills)
+    function comboHeal(amount: number) {
+      if (uLeech > 0 && Math.random() < uLeech * 0.03) {
+        ps.hp = Math.min(ps.hp + amount, ps.maxHp + (ps.activeCombos.includes('second_life') ? 30 + uVitality * 5 : 0));
+        spawnParticles(ps.x, ps.y, 2, '#44ff44', 1);
+      }
+    }
+
+    // BLADE STORM — ALL stats scale
+    if (ps.activeCombos.includes('blade_storm')) {
+      const bladeFreq = Math.max(20, 90 - uFireRate * 8);
+      if (game.time % bladeFreq === 0) {
+        const swordCount = 4 + uMulti + uOrbital;
+        const bladeSpeed = 3 + uVelocity * 0.3 + uSpeed * 0.3;
+        for (let s = 0; s < swordCount; s++) {
+          const spreadAngle = (s / swordCount) * Math.PI * 2 + game.time * 0.01 + uSpeed * 0.1;
+          bladeProjs.push({
+            x: ps.x, y: ps.y,
+            dx: Math.cos(spreadAngle) * bladeSpeed, dy: Math.sin(spreadAngle) * bladeSpeed,
+            life: 60 + uPierce * 12 + uVelocity * 3, angle: spreadAngle,
+          });
+        }
+        spawnParticles(ps.x, ps.y, 12, '#ff4488', 3);
+      }
+    }
+  // NOVA PULSE — BLACK HOLE: travels to target, stops, grows for 4s, implodes
+  if (ps.activeCombos.includes('nova_pulse')) {
+    const novaFreq = Math.max(4 * FPS, 10 * FPS - uFireRate * 25);
+    if (!ps.novaOrbActive && game.time % novaFreq === 0 && enemies.length > 0) {
+      let bestX = ps.x, bestY = ps.y, bestCount = 0;
+      for (const e of enemies) {
+        if (dist2(ps, e) > 200 * 200) continue;
         let count = 0;
         for (const e2 of enemies) { if (dist2(e, e2) < 60 * 60) count++; }
         if (count > bestCount) { bestCount = count; bestX = e.x; bestY = e.y; }
       }
-      const aim = aimDir(player, { x: bestX, y: bestY });
-      const targetDist = Math.sqrt(dist2(player, { x: bestX, y: bestY }));
-      const travelTime = Math.min(60, Math.floor(targetDist / 2)); // time to reach target
-      game.novaOrbActive = {
-        x: player.x, y: player.y,
+      const aim = aimDir(ps, { x: bestX, y: bestY });
+      const targetDist = Math.sqrt(dist2(ps, { x: bestX, y: bestY }));
+      const travelTime = Math.min(60, Math.floor(targetDist / 2));
+      ps.novaOrbActive = {
+        x: ps.x, y: ps.y,
         dx: aim.x * (targetDist / Math.max(1, travelTime)),
         dy: aim.y * (targetDist / Math.max(1, travelTime)),
-        life: travelTime + 4 * FPS + 10, // travel + grow + implode
+        life: travelTime + 4 * FPS + 10,
         maxLife: travelTime + 4 * FPS + 10,
       };
-      (game.novaOrbActive as any).travelTime = travelTime;
-      (game.novaOrbActive as any).growStart = travelTime;
-      (game.novaOrbActive as any).currentRadius = 5;
+      (ps.novaOrbActive as any).travelTime = travelTime;
+      (ps.novaOrbActive as any).growStart = travelTime;
+      (ps.novaOrbActive as any).currentRadius = 5;
     }
-    if (game.novaOrbActive) {
-      const orb = game.novaOrbActive as any;
+    if (ps.novaOrbActive) {
+      const orb = ps.novaOrbActive as any;
       orb.life--;
       const travelLeft = orb.life - (orb.maxLife - orb.travelTime);
 
       if (travelLeft > 0) {
-        // Phase 1: TRAVELING to target
         orb.x += orb.dx; orb.y += orb.dy;
       } else {
-        // Phase 2: GROWING at location
         orb.dx = 0; orb.dy = 0;
         const growTime = 4 * FPS;
-        const growProgress = 1 - (orb.life - 10) / growTime; // 0→1 over 4s
+        const growProgress = 1 - (orb.life - 10) / growTime;
         const maxRadius = 30 + uCaliber * 8 + uMagnet * 5;
         orb.currentRadius = 5 + growProgress * maxRadius;
 
-        // Pull enemies with increasing force
         const pullR = orb.currentRadius * 2.5;
         const pullForce = 1 + growProgress * 4 + uMagnet * 0.5;
         for (const e of enemies) {
@@ -1564,34 +1590,26 @@ function update() {
             const f = pullForce * (1 - ed / pullR);
             e.x += (edx / ed) * f;
             e.y += (edy / ed) * f;
-            // Crush damage while being sucked (thorns)
             if (uThorns > 0 && game.time % 10 === 0) { e.hp -= uThorns; e.hitFlash = 3; }
           }
         }
-        // Also pull drops
         for (const dr of drops) {
           const ddx = orb.x - dr.x, ddy = orb.y - dr.y;
           const dd = Math.sqrt(ddx * ddx + ddy * ddy);
           if (dd < pullR && dd > 2) { dr.x += (ddx / dd) * 2; dr.y += (ddy / dd) * 2; }
         }
-
-        // Continuous shake as it grows
         if (growProgress > 0.5) game.shakeTimer = Math.max(game.shakeTimer, 2);
       }
 
-      // Phase 3: IMPLOSION
       if (orb.life <= 10) {
         if (orb.life === 10) {
-          // BOOM — massive implosion
           const explR = orb.currentRadius * 2;
           Sound.explosion();
           game.shakeTimer = 20;
           game.lightningFlash = 8;
-          // Implosion visual — particles rush INWARD then explode OUT
           for (let a = 0; a < 32; a++) {
             const angle = (a / 32) * Math.PI * 2;
             const dist = explR * 0.8;
-            // Inward rush
             particles.push({
               x: orb.x + Math.cos(angle) * dist, y: orb.y + Math.sin(angle) * dist,
               dx: -Math.cos(angle) * 4, dy: -Math.sin(angle) * 4,
@@ -1599,7 +1617,6 @@ function update() {
               color: a % 2 === 0 ? '#aa22ff' : '#ff44ff', size: 4,
             });
           }
-          // Then outward explosion
           for (let a = 0; a < 24; a++) {
             const angle = (a / 24) * Math.PI * 2;
             particles.push({
@@ -1611,7 +1628,6 @@ function update() {
             });
           }
           spawnParticles(orb.x, orb.y, 30, '#ffffff', 5);
-          // Damage everything in range
           for (const e of enemies) {
             if (dist2(orb, e) < explR * explR) {
               e.hp -= uDmg * 6 + uThorns * 3;
@@ -1621,27 +1637,26 @@ function update() {
           }
         }
       }
-      if (orb.life <= 0) game.novaOrbActive = null;
+      if (orb.life <= 0) ps.novaOrbActive = null;
     }
   }
 
   // SHOCKWAVE — ALL stats scale
-  if (game.activeCombos.includes('shockwave')) {
+  if (ps.activeCombos.includes('shockwave')) {
     const swFreq = Math.max(2 * FPS, 8 * FPS - uFireRate * 30);
-    game.shockwaveTimer--;
-    if (game.shockwaveTimer <= 0) {
-      game.shockwaveTimer = swFreq;
+    ps.shockwaveTimer--;
+    if (ps.shockwaveTimer <= 0) {
+      ps.shockwaveTimer = swFreq;
       game.shakeTimer = 12 + uDmg;
       Sound.shockwave();
       const swSpeed = 5 + uVelocity * 0.5 + uSpeed;
       const swRange = 350 + uCaliber * 30 + uMagnet * 20;
       const ringCount = 1 + Math.floor(uMulti / 3) + Math.floor(uOrbital / 2);
       for (let r = 0; r < ringCount; r++) {
-        shockRings.push({ x: player.x, y: player.y, radius: 10 + r * 8, maxRadius: swRange, speed: swSpeed - r * 0.5, life: 60, color: r === 0 ? '#44ffaa' : '#ffffff' });
+        shockRings.push({ x: ps.x, y: ps.y, radius: 10 + r * 8, maxRadius: swRange, speed: swSpeed - r * 0.5, life: 60, color: r === 0 ? '#44ffaa' : '#ffffff' });
       }
-      spawnParticles(player.x, player.y, 15, '#44ffaa', 4);
-      // Vitality: temp shield during shockwave
-      if (uVitality > 0) player.invincible = Math.max(player.invincible, 15);
+      spawnParticles(ps.x, ps.y, 15, '#44ffaa', 4);
+      if (uVitality > 0) ps.invincible = Math.max(ps.invincible, 15);
     }
   }
   // Update shock rings — expand, damage & push enemies as they pass
@@ -1672,18 +1687,18 @@ function update() {
   }
 
   // METEOR — ALL stats scale
-  if (game.activeCombos.includes('meteor')) {
-    game.meteorTimer--;
+  if (ps.activeCombos.includes('meteor')) {
+    ps.meteorTimer--;
     const meteorFreq = Math.max(1.5 * FPS, 6 * FPS - uFireRate * 30);
-    if (game.meteorTimer <= 0) {
-      game.meteorTimer = meteorFreq;
+    if (ps.meteorTimer <= 0) {
+      ps.meteorTimer = meteorFreq;
       const meteorCount = 1 + Math.floor(uMulti / 2) + Math.floor(uOrbital / 3);
       const meteorRadius = 35 + uCaliber * 5 + uMagnet * 3;
       const meteorDmg = uDmg * 8 + uThorns * 3;
       for (let mi = 0; mi < meteorCount; mi++) {
-        let bestX = player.x + (Math.random() - 0.5) * 80;
-        let bestY = player.y + (Math.random() - 0.5) * 80;
-        const candidates = enemies.filter(e => dist2(player, e) < (200 + uVelocity * 20) * (200 + uVelocity * 20));
+        let bestX = ps.x + (Math.random() - 0.5) * 80;
+        let bestY = ps.y + (Math.random() - 0.5) * 80;
+        const candidates = enemies.filter(e => dist2(ps, e) < (200 + uVelocity * 20) * (200 + uVelocity * 20));
         if (candidates.length > 0) {
           const target = candidates[Math.floor(Math.random() * candidates.length)];
           bestX = target.x; bestY = target.y;
@@ -1713,14 +1728,18 @@ function update() {
         if (dist2(fm, e) < fm.radius * fm.radius) { e.hp -= fm.damage; e.hitFlash = 12; }
       }
       // Combo meteors don't hurt the player
-      if (false && player.invincible <= 0 && dist2(player, fm) < fm.radius * fm.radius) {
-        player.hp -= Math.ceil(fm.damage * 0.3);
-        player.invincible = 30; game.damageFlash = 10;
+      if (false) {
+        for (const pp of players) {
+          if (!pp.dead && pp.invincible <= 0 && dist2(pp, fm) < fm.radius * fm.radius) {
+            pp.hp -= Math.ceil(fm.damage * 0.3);
+            pp.invincible = 30; pp.damageFlash = 10;
+          }
+        }
       }
       // Fire ground
       for (let fi = 0; fi < 6; fi++) {
-        if (game.poisonTrails.length < 80) {
-          game.poisonTrails.push({ x: fm.x + (Math.random() - 0.5) * fm.radius, y: fm.y + (Math.random() - 0.5) * fm.radius, life: 240 });
+        if (ps.poisonTrails.length < 80) {
+          ps.poisonTrails.push({ x: fm.x + (Math.random() - 0.5) * fm.radius, y: fm.y + (Math.random() - 0.5) * fm.radius, life: 240 });
         }
       }
       fallingMeteors.splice(i, 1);
@@ -1728,25 +1747,25 @@ function update() {
   }
 
   // CARPET BOMB — ALL stats scale
-  if (game.activeCombos.includes('carpet_bomb')) {
+  if (ps.activeCombos.includes('carpet_bomb')) {
     const cbFreq = Math.max(2 * FPS, 8 * FPS - uFireRate * 30);
-    game.carpetBombTimer--;
-    if (game.carpetBombTimer <= 0) {
-      game.carpetBombTimer = cbFreq;
+    ps.carpetBombTimer--;
+    if (ps.carpetBombTimer <= 0) {
+      ps.carpetBombTimer = cbFreq;
       const bombCount = 5 + uMulti + Math.floor(uOrbital / 2);
       const bombRadius = 25 + uCaliber * 4 + uMagnet * 2;
       const bombDmg = uDmg * 4 + uThorns * 2;
       const horizontal = Math.random() > 0.5;
-      const camXb = player.x - VIEW_W / 2;
-      const camYb = player.y - VIEW_H / 2;
+      const camXb = ps.x - VIEW_W / 2;
+      const camYb = ps.y - VIEW_H / 2;
       const spread = 60 + uCaliber * 5; // wider spread with caliber
       for (let b = 0; b < bombCount; b++) {
         const delay = b * Math.max(3, 6 - uVelocity * 0.3); // faster sweep with velocity
         const bxp = horizontal
           ? camXb + (b / bombCount) * VIEW_W + (Math.random() - 0.5) * 30
-          : player.x + (Math.random() - 0.5) * spread;
+          : ps.x + (Math.random() - 0.5) * spread;
         const byp = horizontal
-          ? player.y + (Math.random() - 0.5) * spread
+          ? ps.y + (Math.random() - 0.5) * spread
           : camYb + (b / bombCount) * VIEW_H + (Math.random() - 0.5) * 30;
         const fallSpd = Math.max(30, 50 - uVelocity * 2);
         fallingMeteors.push({ x: bxp, y: byp, fallTimer: fallSpd + delay, radius: bombRadius, damage: bombDmg });
@@ -1755,21 +1774,19 @@ function update() {
   }
 
   // DEATH RAY — ALL stats scale (continuous beam)
-  if (game.activeCombos.includes('death_ray') && autoTarget) {
+  if (ps.activeCombos.includes('death_ray') && autoTarget) {
     const tickRate = Math.max(2, 5 - uFireRate);
     if (game.time % tickRate === 0) {
-      const aim = aimDir(player, autoTarget);
+      const aim = aimDir(ps, autoTarget);
       const rayLen = 250 + uPierce * 40 + uVelocity * 20;
       const rayWidth = 10 + uCaliber * 2;
       const rayDmg = uDmg * 2 + uThorns;
       for (let d = 10; d < rayLen; d += 8) {
-        const rx = player.x + aim.x * d, ry = player.y + aim.y * d;
+        const rx = ps.x + aim.x * d, ry = ps.y + aim.y * d;
         for (const e of enemies) {
           if (e.hp <= 0) continue;
           if (dist2({ x: rx, y: ry }, e) < rayWidth * rayWidth) {
-            e.hp -= rayDmg;
-            e.hitFlash = 3;
-            comboHeal(1);
+            e.hp -= rayDmg; e.hitFlash = 3; comboHeal(1);
           }
         }
       }
@@ -1777,30 +1794,28 @@ function update() {
   }
 
   // SNIPER — ALL stats scale
-  if (game.activeCombos.includes('sniper')) {
+  if (ps.activeCombos.includes('sniper')) {
     const snFreq = Math.max(1 * FPS, 4 * FPS - uFireRate * 20);
-    game.sniperTimer--;
-    if (game.sniperTimer <= 0 && autoTarget) {
-      game.sniperTimer = snFreq;
+    ps.sniperTimer--;
+    if (ps.sniperTimer <= 0 && autoTarget) {
+      ps.sniperTimer = snFreq;
       const shotCount = 1 + Math.floor(uMulti / 3);
       const snipeDmg = uDmg * 10 + uThorns * 3;
       const lineLen = 500 + uVelocity * 30 + uPierce * 50;
       for (let si = 0; si < shotCount; si++) {
         const target = si === 0 ? autoTarget : enemies[Math.floor(Math.random() * enemies.length)];
         if (!target) continue;
-        const aim = aimDir(player, target);
+        const aim = aimDir(ps, target);
         beamLines.push({
-          x1: player.x, y1: player.y,
-          x2: player.x + aim.x * lineLen, y2: player.y + aim.y * lineLen,
+          x1: ps.x, y1: ps.y, x2: ps.x + aim.x * lineLen, y2: ps.y + aim.y * lineLen,
           life: 12, color: '#4488ff', width: 2 + uCaliber * 0.5,
         });
         for (let d = 10; d < lineLen; d += 8) {
-          const sx = player.x + aim.x * d, sy = player.y + aim.y * d;
+          const sx = ps.x + aim.x * d, sy = ps.y + aim.y * d;
           for (const e of enemies) {
             if (e.hp <= 0) continue;
             if (dist2({ x: sx, y: sy }, e) < (10 + uCaliber) * (10 + uCaliber)) {
-              e.hp -= snipeDmg; e.hitFlash = 10;
-              comboHeal(2);
+              e.hp -= snipeDmg; e.hitFlash = 10; comboHeal(2);
               spawnParticles(e.x, e.y, 4, '#4488ff', 3);
             }
           }
@@ -1810,33 +1825,29 @@ function update() {
     }
   }
 
-  // BULLET HELL — homing handled in laser update, scales naturally with multishot/fire rate
-
   // RAILGUN — ALL stats scale
-  if (game.activeCombos.includes('railgun')) {
+  if (ps.activeCombos.includes('railgun')) {
     const rgFreq = Math.max(1 * FPS, 3 * FPS - uFireRate * 15);
-    game.railgunTimer--;
-    if (game.railgunTimer <= 0 && autoTarget) {
-      game.railgunTimer = rgFreq;
+    ps.railgunTimer--;
+    if (ps.railgunTimer <= 0 && autoTarget) {
+      ps.railgunTimer = rgFreq;
       const lineCount = 1 + Math.floor(uMulti / 4);
       const lineLen = 600 + uVelocity * 30 + uPierce * 40;
       const rgDmg = uDmg * 5 + uThorns * 2;
       for (let ri = 0; ri < lineCount; ri++) {
         const target = ri === 0 ? autoTarget : enemies[Math.floor(Math.random() * enemies.length)];
         if (!target) continue;
-        const aim = aimDir(player, target);
+        const aim = aimDir(ps, target);
         beamLines.push({
-          x1: player.x, y1: player.y,
-          x2: player.x + aim.x * lineLen, y2: player.y + aim.y * lineLen,
+          x1: ps.x, y1: ps.y, x2: ps.x + aim.x * lineLen, y2: ps.y + aim.y * lineLen,
           life: 8, color: '#88ffff', width: 2 + uCaliber * 0.4,
         });
         for (let d = 10; d < lineLen; d += 6) {
-          const rx = player.x + aim.x * d, ry = player.y + aim.y * d;
+          const rx = ps.x + aim.x * d, ry = ps.y + aim.y * d;
           for (const e of enemies) {
             if (e.hp <= 0) continue;
             if (dist2({ x: rx, y: ry }, e) < (8 + uCaliber) * (8 + uCaliber)) {
-              e.hp -= rgDmg; e.hitFlash = 8;
-              comboHeal(1);
+              e.hp -= rgDmg; e.hitFlash = 8; comboHeal(1);
             }
           }
         }
@@ -1846,35 +1857,31 @@ function update() {
   }
 
   // BULLET TIME — ALL stats scale
-  if (game.activeCombos.includes('bullet_time')) {
+  if (ps.activeCombos.includes('bullet_time')) {
     const btFreq = Math.max(8 * FPS, 15 * FPS - uFireRate * 30);
-    game.bulletTimeTimer--;
-    if (game.bulletTimeTimer <= 0) {
-      game.bulletTimeTimer = btFreq;
-      game.bulletTimeActive = Math.floor(3 * FPS + uPierce * 15 + uVelocity * 5);
-      spawnParticles(player.x, player.y, 15, '#aaccff', 3);
-      // Speed boost for player during bullet time
-      if (uSpeed > 1.5) player.invincible = Math.max(player.invincible, 10);
+    ps.bulletTimeTimer--;
+    if (ps.bulletTimeTimer <= 0) {
+      ps.bulletTimeTimer = btFreq;
+      ps.bulletTimeActive = Math.floor(3 * FPS + uPierce * 15 + uVelocity * 5);
+      spawnParticles(ps.x, ps.y, 15, '#aaccff', 3);
+      if (uSpeed > 1.5) ps.invincible = Math.max(ps.invincible, 10);
     }
-    if (game.bulletTimeActive > 0) {
-      game.bulletTimeActive--;
+    if (ps.bulletTimeActive > 0) {
+      ps.bulletTimeActive--;
       for (const e of enemies) { e.slowTimer = Math.max(e.slowTimer, 5); }
-      // Damage during slow (thorns)
       if (uThorns > 0 && game.time % 30 === 0) {
         for (const e of enemies) {
-          if (dist2(player, e) < (80 + uCaliber * 10) * (80 + uCaliber * 10)) {
+          if (dist2(ps, e) < (80 + uCaliber * 10) * (80 + uCaliber * 10)) {
             e.hp -= uThorns; e.hitFlash = 3;
           }
         }
       }
-      // Heal during bullet time (vitality)
       if (uVitality > 0 && game.time % 60 === 0) {
-        player.hp = Math.min(player.hp + 1, player.maxHp);
+        ps.hp = Math.min(ps.hp + 1, ps.maxHp);
       }
-      // Magnet pull during bullet time
       if (uMagnet > 0) {
         for (const dr of drops) {
-          const ddx = player.x - dr.x, ddy = player.y - dr.y;
+          const ddx = ps.x - dr.x, ddy = ps.y - dr.y;
           const dd = Math.sqrt(ddx * ddx + ddy * ddy);
           if (dd > 2) { dr.x += (ddx / dd) * 2; dr.y += (ddy / dd) * 2; }
         }
@@ -1883,30 +1890,263 @@ function update() {
   }
 
   // WARP FIELD — ALL stats scale
-  if (game.activeCombos.includes('warp_field')) {
+  if (ps.activeCombos.includes('warp_field')) {
     const wfRange = 50 + uMagnet * 20 + uSpeed * 10 + uCaliber * 5;
     const pullStr = 2.5 + uVelocity * 0.3 + uMagnet * 0.5;
-    // Pull all drops
     for (const dr of drops) {
-      const ddx = player.x - dr.x, ddy = player.y - dr.y;
+      const ddx = ps.x - dr.x, ddy = ps.y - dr.y;
       const dd = Math.sqrt(ddx * ddx + ddy * ddy);
       if (dd > 2 && dd < wfRange * 3) {
         dr.x += (ddx / dd) * pullStr;
         dr.y += (ddy / dd) * pullStr;
       }
     }
-    // Enemy push + damage aura
     if (game.time % 10 === 0) {
       for (const e of enemies) {
-        const dx = e.x - player.x, dy = e.y - player.y;
+        const dx = e.x - ps.x, dy = e.y - ps.y;
         const d = Math.sqrt(dx * dx + dy * dy);
         if (d < wfRange && d > 0) {
           const pushStr = 1.5 + uDmg * 0.3;
           e.x += (dx / d) * pushStr;
           e.y += (dy / d) * pushStr;
-          // Thorns aura damage
           if (uThorns > 0) { e.hp -= uThorns; e.hitFlash = 2; comboHeal(1); }
         }
+      }
+    }
+  }
+
+  // ── Right-click skill (per player) ──
+  if (ps.skillCooldown > 0) ps.skillCooldown--;
+  const useSkill = ps.playerIndex === 0 ? mouse.rightClicked : keys['enter'];
+  if (useSkill && ps.activeSkill && ps.skillCooldown <= 0 && ps.skillActive <= 0) {
+    const skill = ps.activeSkill;
+    ps.skillCooldown = skill.cooldown;
+    // For P1 use mouse target, for P2 use facing direction
+    let worldMX = ps.x, worldMY = ps.y;
+    if (ps.playerIndex === 0) {
+      const alivePl = players.filter(p => !p.dead);
+      const mX = alivePl.reduce((s, p) => s + p.x, 0) / alivePl.length;
+      const mY = alivePl.reduce((s, p) => s + p.y, 0) / alivePl.length;
+      worldMX = mouse.x + (mX - VIEW_W / 2);
+      worldMY = mouse.y + (mY - VIEW_H / 2);
+    } else {
+      const dirVec = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
+      const dv = dirVec[ps.dir];
+      worldMX = ps.x + dv.x * 100;
+      worldMY = ps.y + dv.y * 100;
+    }
+    switch (skill.id) {
+      case 'dash': {
+        Sound.dash();
+        const aim = aimDir(ps, { x: worldMX, y: worldMY });
+        ps.dashDx = aim.x * 7; ps.dashDy = aim.y * 7;
+        ps.skillActive = 20; ps.invincible = 25;
+        spawnParticles(ps.x, ps.y, 20, '#44ffcc', 4);
+        for (const e of enemies) {
+          if (dist2(ps, e) < 40 * 40) { e.hp -= weapon.damage * 3; e.hitFlash = 10; }
+        }
+        break;
+      }
+      case 'grenade': {
+        Sound.explosion();
+        const aim = aimDir(ps, { x: worldMX, y: worldMY });
+        const gx = ps.x + aim.x * 120, gy = ps.y + aim.y * 120;
+        spawnParticles(gx, gy, 40, '#ff6622', 6);
+        spawnParticles(gx, gy, 25, '#ffaa44', 4);
+        spawnParticles(gx, gy, 15, '#ffffff', 3);
+        game.shakeTimer = 8;
+        for (const e of enemies) {
+          if (dist2({ x: gx, y: gy }, e) < 80 * 80) { e.hp -= weapon.damage * 5; e.hitFlash = 12; }
+        }
+        break;
+      }
+      case 'shield_skill': {
+        ps.skillActive = 180; ps.invincible = 185;
+        spawnParticles(ps.x, ps.y, 20, '#4488ff', 3);
+        break;
+      }
+      case 'shockwave': {
+        Sound.shockwave();
+        for (let ring = 0; ring < 3; ring++) {
+          for (let a = 0; a < 24; a++) {
+            const angle = (a / 24) * Math.PI * 2;
+            particles.push({
+              x: ps.x, y: ps.y,
+              dx: Math.cos(angle) * (3 + ring * 2), dy: Math.sin(angle) * (3 + ring * 2),
+              life: 20 + ring * 5, maxLife: 25 + ring * 5,
+              color: ring === 0 ? '#ffffff' : ring === 1 ? '#ffcc44' : '#ff8822',
+              size: 3 - ring * 0.5,
+            });
+          }
+        }
+        spawnParticles(ps.x, ps.y, 40, '#ffee88', 6);
+        spawnParticles(ps.x, ps.y, 20, '#ffffff', 3);
+        game.shakeTimer = 12;
+        for (const e of enemies) {
+          const ddx = e.x - ps.x, ddy = e.y - ps.y;
+          const d = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (d < 120 && d > 0) {
+            const force = 40 * (1 - d / 120);
+            e.x += (ddx / d) * force; e.y += (ddy / d) * force;
+            e.hp -= weapon.damage * 2; e.hitFlash = 12;
+          }
+        }
+        break;
+      }
+    }
+  }
+  if (ps.playerIndex === 0) mouse.rightClicked = false;
+  if (ps.playerIndex === 1 && keys['enter']) keys['enter'] = false;
+
+  // Dash movement
+  if (ps.skillActive > 0 && ps.activeSkill?.id === 'dash') {
+    ps.x += ps.dashDx; ps.y += ps.dashDy;
+    spawnParticles(ps.x, ps.y, 2, '#44ffcc', 1);
+    ps.skillActive--;
+  } else if (ps.skillActive > 0 && ps.activeSkill?.id === 'shield_skill') {
+    ps.skillActive--;
+  }
+
+  // ── Drone (super rare, per player) ──
+  if (ps.droneCount > 0) {
+    ps.droneAngle += 0.03;
+    if (game.time % 15 === 0) {
+      for (let i = 0; i < ps.droneCount; i++) {
+        const angle = ps.droneAngle + (i / ps.droneCount) * Math.PI * 2;
+        const dx = ps.x + Math.cos(angle) * 40;
+        const dy = ps.y + Math.sin(angle) * 40;
+        let closest: Enemy | null = null;
+        let closestDist = 120 * 120;
+        for (const e of enemies) {
+          const d = dist2({ x: dx, y: dy }, e);
+          if (d < closestDist) { closestDist = d; closest = e; }
+        }
+        if (closest) {
+          const aim = aimDir({ x: dx, y: dy }, closest);
+          lasers.push({
+            x: dx, y: dy, dx: aim.x * 4, dy: aim.y * 4,
+            life: 30, fromPlayer: true,
+            damage: Math.max(1, Math.floor(weapon.damage * 0.4)),
+            size: 2, pierce: 0, pierceHit: new Set(),
+            color: '#44ccff', glowColor: '#88ddff', trailLength: 1,
+          });
+        }
+      }
+    }
+  }
+
+  // ── Shadow Clone (per player) ──
+  if (ps.shadowClone) {
+    const sc = ps.shadowClone;
+    sc.trail.push({ x: ps.x, y: ps.y });
+    const delayFrames = 120;
+    if (sc.trail.length > delayFrames) {
+      const pos = sc.trail.shift()!;
+      sc.x = pos.x; sc.y = pos.y;
+    }
+    const cloneFireRate = Math.max(8, weapon.fireRate + 4);
+    if (game.time % cloneFireRate === 0) {
+      let closest: Enemy | null = null;
+      let closestDist = 150 * 150;
+      for (const e of enemies) {
+        const d = dist2(sc, e);
+        if (d < closestDist) { closestDist = d; closest = e; }
+      }
+      if (closest) {
+        const baseAim = aimDir(sc, closest);
+        const cloneCount = Math.max(1, weapon.count - 1);
+        const cloneDmg = Math.max(1, Math.floor(weapon.damage * 0.6));
+        const clonePierce = Math.max(0, weapon.pierce - 1);
+        for (let ci = 0; ci < cloneCount; ci++) {
+          let aim = baseAim;
+          if (cloneCount > 1) {
+            const spreadAngle = (ci - (cloneCount - 1) / 2) * weapon.spread;
+            aim = rotateVec(baseAim, spreadAngle);
+          }
+          lasers.push({
+            x: sc.x, y: sc.y,
+            dx: aim.x * weapon.speed * 0.8, dy: aim.y * weapon.speed * 0.8,
+            life: 40, fromPlayer: true,
+            damage: cloneDmg, size: Math.max(2, weapon.size - 1),
+            pierce: clonePierce, pierceHit: new Set(),
+            color: '#8844cc', glowColor: '#aa66ee', trailLength: 2,
+          });
+        }
+      }
+    }
+  }
+
+  // ── Thunder (per player) ──
+  if (ps.activeSuperRares.includes('thunder')) {
+    ps.thunderTimer--;
+    if (ps.thunderTimer <= 0) {
+      ps.thunderTimer = 180;
+      if (enemies.length > 0) {
+        const target = enemies[Math.floor(Math.random() * enemies.length)];
+        target.hp -= weapon.damage * 4; target.hitFlash = 15;
+        chainArcs.push({ x1: target.x, y1: target.y - 200, x2: target.x + (Math.random()-0.5)*30, y2: target.y, life: 15 });
+        chainArcs.push({ x1: target.x + (Math.random()-0.5)*15, y1: target.y - 150, x2: target.x, y2: target.y, life: 12 });
+        spawnParticles(target.x, target.y, 20, '#ffff88', 5);
+        spawnParticles(target.x, target.y, 10, '#ffffff', 3);
+        game.lightningFlash = 6;
+        Sound.thunder();
+      }
+    }
+  }
+
+  // ── Poison Trail (per player) ──
+  if (ps.activeSuperRares.includes('poison_trail') && ps.moving && game.time % 6 === 0 && ps.poisonTrails.length < 80) {
+    ps.poisonTrails.push({ x: ps.x, y: ps.y, life: 300 });
+  }
+  for (let i = ps.poisonTrails.length - 1; i >= 0; i--) {
+    const pt = ps.poisonTrails[i];
+    pt.life--;
+    if (pt.life <= 0) { ps.poisonTrails.splice(i, 1); continue; }
+    if (game.time % 30 === 0) {
+      for (let j = enemies.length - 1; j >= 0; j--) {
+        const e = enemies[j];
+        if (dist2(pt, e) < 12 * 12) {
+          e.hp -= Math.max(1, Math.floor(weapon.damage * 0.3));
+          e.hitFlash = 4;
+          if (e.hp <= 0) onEnemyKill(e, j);
+        }
+      }
+    }
+  }
+
+  // ── Shield Orb (per player) ──
+  if (ps.activeSuperRares.includes('shield_orb') && !ps.shieldOrbActive) {
+    ps.shieldOrbTimer--;
+    if (ps.shieldOrbTimer <= 0) {
+      ps.shieldOrbActive = true;
+      spawnParticles(ps.x, ps.y, 10, '#44aaff', 2);
+    }
+  }
+
+  // ── Magnet Pulse (per player) ──
+  if (ps.activeSuperRares.includes('magnet_pulse')) {
+    ps.magnetPulseTimer--;
+    if (ps.magnetPulseTimer <= 0) {
+      ps.magnetPulseTimer = 600;
+      spawnParticles(ps.x, ps.y, 20, '#ff88ff', 4);
+      for (const dr of drops) { (dr as any)._magnetPull = 60; }
+      shockRings.push({ x: ps.x, y: ps.y, radius: 300, maxRadius: 10, speed: -8, life: 30, color: '#ff88ff' });
+    }
+  }
+
+  } // ── END PER-PLAYER LOOP ──
+
+  // ── Update blade projectiles (shared) ──
+  for (let i = bladeProjs.length - 1; i >= 0; i--) {
+    const bp = bladeProjs[i];
+    bp.x += bp.dx; bp.y += bp.dy;
+    bp.angle += 0.3;
+    bp.life--;
+    if (bp.life <= 0) { bladeProjs.splice(i, 1); continue; }
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      if (dist2(bp, e) < 18 * 18) {
+        e.hp -= 6; e.hitFlash = 6;
       }
     }
   }
@@ -1968,252 +2208,11 @@ function update() {
     if (beamLines[i].life <= 0) beamLines.splice(i, 1);
   }
 
-  // ── Right-click skill ──
-  if (game.skillCooldown > 0) game.skillCooldown--;
-  if (mouse.rightClicked && game.activeSkill && game.skillCooldown <= 0 && game.skillActive <= 0) {
-    const skill = game.activeSkill;
-    game.skillCooldown = skill.cooldown;
-    const camX = player.x - VIEW_W / 2;
-    const camY = player.y - VIEW_H / 2;
-    const worldMX = mouse.x + camX;
-    const worldMY = mouse.y + camY;
-
-    switch (skill.id) {
-      case 'dash': {
-        Sound.dash();
-        const aim = aimDir(player, { x: worldMX, y: worldMY });
-        game.dashDx = aim.x * 7;
-        game.dashDy = aim.y * 7;
-        game.skillActive = 20;
-        player.invincible = 25;
-        spawnParticles(player.x, player.y, 20, '#44ffcc', 4);
-        // Damage enemies along path
-        for (const e of enemies) {
-          if (dist2(player, e) < 40 * 40) {
-            e.hp -= weapon.damage * 3;
-            e.hitFlash = 10;
-          }
-        }
-        break;
-      }
-      case 'grenade': {
-        Sound.explosion();
-        const aim = aimDir(player, { x: worldMX, y: worldMY });
-        const gx = player.x + aim.x * 120;
-        const gy = player.y + aim.y * 120;
-        // Big explosion
-        spawnParticles(gx, gy, 40, '#ff6622', 6);
-        spawnParticles(gx, gy, 25, '#ffaa44', 4);
-        spawnParticles(gx, gy, 15, '#ffffff', 3);
-        game.shakeTimer = 8;
-        const aoeRadius = 80;
-        for (const e of enemies) {
-          if (dist2({ x: gx, y: gy }, e) < aoeRadius * aoeRadius) {
-            e.hp -= weapon.damage * 5;
-            e.hitFlash = 12;
-          }
-        }
-        break;
-      }
-      case 'shield_skill': {
-        game.skillActive = 180; // 3s
-        player.invincible = 185;
-        spawnParticles(player.x, player.y, 20, '#4488ff', 3);
-        break;
-      }
-      case 'shockwave': {
-        Sound.shockwave();
-        const pushRadius = 120;
-        // Massive expanding shockwave rings
-        for (let ring = 0; ring < 3; ring++) {
-          const ringR = 20 + ring * 25;
-          for (let a = 0; a < 24; a++) {
-            const angle = (a / 24) * Math.PI * 2;
-            particles.push({
-              x: player.x, y: player.y,
-              dx: Math.cos(angle) * (3 + ring * 2), dy: Math.sin(angle) * (3 + ring * 2),
-              life: 20 + ring * 5, maxLife: 25 + ring * 5,
-              color: ring === 0 ? '#ffffff' : ring === 1 ? '#ffcc44' : '#ff8822',
-              size: 3 - ring * 0.5,
-            });
-          }
-        }
-        // Center flash
-        spawnParticles(player.x, player.y, 40, '#ffee88', 6);
-        spawnParticles(player.x, player.y, 20, '#ffffff', 3);
-        game.shakeTimer = 12;
-        // Push ALL enemies in radius, massive force
-        for (const e of enemies) {
-          const ddx = e.x - player.x, ddy = e.y - player.y;
-          const d = Math.sqrt(ddx * ddx + ddy * ddy);
-          if (d < pushRadius && d > 0) {
-            const force = 40 * (1 - d / pushRadius);
-            e.x += (ddx / d) * force;
-            e.y += (ddy / d) * force;
-            e.hp -= weapon.damage * 2;
-            e.hitFlash = 12;
-          }
-        }
-        break;
-      }
-    }
-  }
-  mouse.rightClicked = false;
-
-  // Dash movement
-  if (game.skillActive > 0 && game.activeSkill?.id === 'dash') {
-    player.x += game.dashDx;
-    player.y += game.dashDy;
-    spawnParticles(player.x, player.y, 2, '#44ffcc', 1);
-    game.skillActive--;
-  } else if (game.skillActive > 0 && game.activeSkill?.id === 'shield_skill') {
-    game.skillActive--;
-  }
-
-  // ── Drone (super rare) ──
-  if (game.droneCount > 0) {
-    game.droneAngle += 0.03;
-    if (game.time % 15 === 0) {
-      for (let i = 0; i < game.droneCount; i++) {
-        const angle = game.droneAngle + (i / game.droneCount) * Math.PI * 2;
-        const dx = player.x + Math.cos(angle) * 40;
-        const dy = player.y + Math.sin(angle) * 40;
-        // Find nearest enemy
-        let closest: Enemy | null = null;
-        let closestDist = 120 * 120;
-        for (const e of enemies) {
-          const d = dist2({ x: dx, y: dy }, e);
-          if (d < closestDist) { closestDist = d; closest = e; }
-        }
-        if (closest) {
-          const aim = aimDir({ x: dx, y: dy }, closest);
-          lasers.push({
-            x: dx, y: dy,
-            dx: aim.x * 4, dy: aim.y * 4,
-            life: 30, fromPlayer: true,
-            damage: Math.max(1, Math.floor(weapon.damage * 0.4)),
-            size: 2, pierce: 0, pierceHit: new Set(),
-            color: '#44ccff', glowColor: '#88ddff', trailLength: 1,
-          });
-        }
-      }
-    }
-  }
-
-  // ── Shadow Clone ──
-  if (game.shadowClone) {
-    const sc = game.shadowClone;
-    // Follow player with 2s delay via trail
-    sc.trail.push({ x: player.x, y: player.y });
-    const delayFrames = 120; // 2s
-    if (sc.trail.length > delayFrames) {
-      const pos = sc.trail.shift()!;
-      sc.x = pos.x;
-      sc.y = pos.y;
-    }
-    // Clone shoots using player weapon stats (60% power)
-    const cloneFireRate = Math.max(8, weapon.fireRate + 4);
-    if (game.time % cloneFireRate === 0) {
-      let closest: Enemy | null = null;
-      let closestDist = 150 * 150;
-      for (const e of enemies) {
-        const d = dist2(sc, e);
-        if (d < closestDist) { closestDist = d; closest = e; }
-      }
-      if (closest) {
-        const baseAim = aimDir(sc, closest);
-        const cloneCount = Math.max(1, weapon.count - 1);
-        const cloneDmg = Math.max(1, Math.floor(weapon.damage * 0.6));
-        const clonePierce = Math.max(0, weapon.pierce - 1);
-        for (let ci = 0; ci < cloneCount; ci++) {
-          let aim = baseAim;
-          if (cloneCount > 1) {
-            const spreadAngle = (ci - (cloneCount - 1) / 2) * weapon.spread;
-            aim = rotateVec(baseAim, spreadAngle);
-          }
-          lasers.push({
-            x: sc.x, y: sc.y,
-            dx: aim.x * weapon.speed * 0.8, dy: aim.y * weapon.speed * 0.8,
-            life: 40, fromPlayer: true,
-            damage: cloneDmg,
-            size: Math.max(2, weapon.size - 1), pierce: clonePierce, pierceHit: new Set(),
-            color: '#8844cc', glowColor: '#aa66ee', trailLength: 2,
-          });
-        }
-      }
-    }
-  }
-
-  // ── Thunder (random strikes every 3s) — with full visual + SFX ──
-  if (game.activeSuperRares.includes('thunder')) {
-    game.thunderTimer--;
-    if (game.thunderTimer <= 0) {
-      game.thunderTimer = 180; // 3s
-      if (enemies.length > 0) {
-        const target = enemies[Math.floor(Math.random() * enemies.length)];
-        target.hp -= weapon.damage * 4;
-        target.hitFlash = 15;
-        // Lightning bolt visual — from sky to target
-        chainArcs.push({ x1: target.x, y1: target.y - 200, x2: target.x + (Math.random()-0.5)*30, y2: target.y, life: 15 });
-        chainArcs.push({ x1: target.x + (Math.random()-0.5)*15, y1: target.y - 150, x2: target.x, y2: target.y, life: 12 });
-        spawnParticles(target.x, target.y, 20, '#ffff88', 5);
-        spawnParticles(target.x, target.y, 10, '#ffffff', 3);
-        game.lightningFlash = 6;
-        Sound.thunder();
-      }
-    }
-  }
-
-  // ── Poison Trail ──
-  if (game.activeSuperRares.includes('poison_trail') && player.moving && game.time % 6 === 0 && game.poisonTrails.length < 80) {
-    game.poisonTrails.push({ x: player.x, y: player.y, life: 300 }); // 5s
-  }
-  for (let i = game.poisonTrails.length - 1; i >= 0; i--) {
-    const pt = game.poisonTrails[i];
-    pt.life--;
-    if (pt.life <= 0) { game.poisonTrails.splice(i, 1); continue; }
-    // Damage enemies in trail
-    if (game.time % 30 === 0) {
-      for (let j = enemies.length - 1; j >= 0; j--) {
-        const e = enemies[j];
-        if (dist2(pt, e) < 12 * 12) {
-          e.hp -= Math.max(1, Math.floor(weapon.damage * 0.3));
-          e.hitFlash = 4;
-          if (e.hp <= 0) onEnemyKill(e, j);
-        }
-      }
-    }
-  }
-
-  // ── Shield Orb (blocks 1 hit every 15s) ──
-  if (game.activeSuperRares.includes('shield_orb') && !game.shieldOrbActive) {
-    game.shieldOrbTimer--;
-    if (game.shieldOrbTimer <= 0) {
-      game.shieldOrbActive = true;
-      spawnParticles(player.x, player.y, 10, '#44aaff', 2);
-    }
-  }
-
-  // ── Magnet Pulse (pull all XP every 10s) ──
-  if (game.activeSuperRares.includes('magnet_pulse')) {
-    game.magnetPulseTimer--;
-    if (game.magnetPulseTimer <= 0) {
-      game.magnetPulseTimer = 600; // 10s
-      spawnParticles(player.x, player.y, 20, '#ff88ff', 4);
-      // Mark all drops for magnet pull (will be pulled over next few frames)
-      for (const dr of drops) {
-        (dr as any)._magnetPull = 60; // 1 second of strong pull
-      }
-      // Visual — contracting magnet ring
-      shockRings.push({ x: player.x, y: player.y, radius: 300, maxRadius: 10, speed: -8, life: 30, color: '#ff88ff' });
-    }
-  }
-
   // Update lasers
   for (let i = lasers.length - 1; i >= 0; i--) {
     const l = lasers[i];
     // BULLET HELL — homing: player projectiles curve toward nearest enemy
-    if (l.fromPlayer && game.activeCombos.includes('bullet_hell')) {
+    if (l.fromPlayer && players.some(p => !p.dead && p.activeCombos.includes('bullet_hell'))) {
       let closest: Enemy | null = null;
       let closestD = 100 * 100;
       for (const e of enemies) {
@@ -2258,10 +2257,10 @@ function update() {
           e.hitFlash = 8;
           spawnParticles(l.x, l.y, 8, l.color, 2);
 
-          // Affix effects
-          applyAffixOnHit(l.x, l.y, l.damage, e);
+          // Affix effects (use P1 context for shared lasers)
+          applyAffixOnHit(l.x, l.y, l.damage, e, players[0]);
           applyComboOnHit(l, e);
-          applyRicochet(l.x, l.y, l.damage, e);
+          applyRicochet(l.x, l.y, l.damage, e, players[0]);
 
           if (l.pierce > 0) {
             l.pierceHit.add(e);
@@ -2296,7 +2295,7 @@ function update() {
       if (intercepted) continue;
 
       // REFLECT combo — deflect enemy projectiles back
-      if (game.activeCombos.includes('reflect')) {
+      if (players.some(p => !p.dead && p.activeCombos.includes('reflect'))) {
         l.dx = -l.dx; l.dy = -l.dy;
         l.fromPlayer = true;
         l.life = 40;
@@ -2304,45 +2303,51 @@ function update() {
         spawnParticles(l.x, l.y, 5, '#4488ff', 2);
         continue;
       }
-      // Enemy projectile → player collision
-      if (player.invincible <= 0) {
-        const ddx = l.x - player.x, ddy = l.y - player.y;
+      // Enemy projectile → player collision (check both players)
+      let hitAny = false;
+      for (const pp of players) {
+        if (pp.dead || pp.invincible > 0) continue;
+        const ddx = l.x - pp.x, ddy = l.y - pp.y;
         if (ddx * ddx + ddy * ddy < 8 * 8) {
-          const wasHit = damagePlayer(l.damage, l.x, l.y);
+          damagePlayer(l.damage, l.x, l.y, pp);
           lasers.splice(i, 1);
+          hitAny = true;
+          break;
         }
       }
+      if (hitAny) continue;
     }
   }
 
-  // Enemy → player collision (no push)
-  const thornsLv = game.upgradeLevels.get('thorns') || 0;
+  // Enemy → player collision (check both players)
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
-    if (player.invincible <= 0) {
-      const ddx = player.x - e.x, ddy = player.y - e.y;
+    for (const pp of players) {
+      if (pp.dead || pp.invincible > 0) continue;
+      const ddx = pp.x - e.x, ddy = pp.y - e.y;
       const hitR = e.type === 'superboss' ? 24 : e.type === 'boss' ? 20 : e.type === 'miniboss' ? 16 : e.type === 'tank' ? 16 : 12;
       if (ddx * ddx + ddy * ddy < hitR * hitR) {
         // Shield orb blocks hit
-        if (game.shieldOrbActive && game.activeSuperRares.includes('shield_orb')) {
-          game.shieldOrbActive = false;
-          game.shieldOrbTimer = 900; // 15s cooldown
-          player.invincible = 30;
-          spawnParticles(player.x, player.y, 20, '#44aaff', 4);
+        if (pp.shieldOrbActive && pp.activeSuperRares.includes('shield_orb')) {
+          pp.shieldOrbActive = false;
+          pp.shieldOrbTimer = 900;
+          pp.invincible = 30;
+          spawnParticles(pp.x, pp.y, 20, '#44aaff', 4);
           continue;
         }
         const diff = getDifficulty();
         const dmg = e.type === 'superboss' ? 30 : e.type === 'boss' ? 20 : e.type === 'miniboss' ? 15 : diff.contactDmg;
-        const wasHit = damagePlayer(dmg, e.x, e.y);
-        if (!wasHit) continue; // dodged
-        // Thorns (3x if BLADE STORM combo active)
-        const bladeStorm = game.activeCombos.includes('blade_storm');
-        if (thornsLv > 0) {
-          const thornsDmg = thornsLv * 2 * (bladeStorm ? 3 : 1);
+        const wasHit = damagePlayer(dmg, e.x, e.y, pp);
+        if (!wasHit) continue;
+        // Thorns
+        const pThornsLv = pp.upgradeLevels.get('thorns') || 0;
+        const bladeStorm = pp.activeCombos.includes('blade_storm');
+        if (pThornsLv > 0) {
+          const thornsDmg = pThornsLv * 2 * (bladeStorm ? 3 : 1);
           e.hp -= thornsDmg;
           e.hitFlash = 8;
           spawnParticles(e.x, e.y, bladeStorm ? 15 : 5, bladeStorm ? '#ff8888' : '#ffaa88', bladeStorm ? 3 : 2);
-          if (e.hp <= 0) { onEnemyKill(e, i); continue; }
+          if (e.hp <= 0) { onEnemyKill(e, i); break; }
         }
       }
     }
@@ -2375,7 +2380,15 @@ function update() {
       }
     }
 
-    const ddx = player.x - e.x, ddy = player.y - e.y;
+    // Find nearest alive player for enemy targeting
+    let nearestP = players[0];
+    let nearestPDist = Infinity;
+    for (const pp of players) {
+      if (pp.dead) continue;
+      const pd = dist2(e, pp);
+      if (pd < nearestPDist) { nearestPDist = pd; nearestP = pp; }
+    }
+    const ddx = nearestP.x - e.x, ddy = nearestP.y - e.y;
     const edist = Math.sqrt(ddx * ddx + ddy * ddy);
 
     if (e.type === 'superboss' || e.type === 'boss') {
@@ -2423,7 +2436,7 @@ function update() {
       if (e.shootTimer <= 0) {
         e.shootTimer = 90 + Math.floor(Math.random() * 30);
         if (edist > 0) {
-          const aim = aimDir(e, player);
+          const aim = aimDir(e, nearestP);
           lasers.push({
             x: e.x, y: e.y,
             dx: aim.x * 2, dy: aim.y * 2,
@@ -2466,8 +2479,8 @@ function update() {
 
     // Elite affix behaviors
     if (e.elite) {
-      if (e.elite === 'fire_trail' && e.animTimer % 10 === 0 && game.poisonTrails.length < 80) {
-        game.poisonTrails.push({ x: e.x, y: e.y, life: 180 });
+      if (e.elite === 'fire_trail' && e.animTimer % 10 === 0 && players[0].poisonTrails.length < 80) {
+        players[0].poisonTrails.push({ x: e.x, y: e.y, life: 180 });
       }
       if (e.elite === 'teleport') {
         e.teleportTimer!--;
@@ -2477,8 +2490,8 @@ function update() {
           const angle = Math.random() * Math.PI * 2;
           const tpDist = 40 + Math.random() * 60;
           spawnParticles(e.x, e.y, 8, '#8844cc', 2);
-          e.x = player.x + Math.cos(angle) * tpDist;
-          e.y = player.y + Math.sin(angle) * tpDist;
+          e.x = nearestP.x + Math.cos(angle) * tpDist;
+          e.y = nearestP.y + Math.sin(angle) * tpDist;
           spawnParticles(e.x, e.y, 8, '#8844cc', 2);
         }
       }
@@ -2539,9 +2552,12 @@ function update() {
       const angle = Math.random() * Math.PI * 2;
       const dist = 40 + Math.random() * 100;
       const diff = getDifficulty();
+      // Target a random alive player
+      const dzTarget = players.filter(p => !p.dead);
+      const dzP = dzTarget[Math.floor(Math.random() * dzTarget.length)] || players[0];
       dangerZones.push({
-        x: player.x + Math.cos(angle) * dist,
-        y: player.y + Math.sin(angle) * dist,
+        x: dzP.x + Math.cos(angle) * dist,
+        y: dzP.y + Math.sin(angle) * dist,
         radius: 25 + Math.random() * 20,
         warnTime: 90, // 1.5s warning
         damage: Math.ceil(diff.contactDmg * 0.8),
@@ -2575,8 +2591,8 @@ function update() {
         Sound.explosion();
         // Fire ground at impact
         for (let fi = 0; fi < 6; fi++) {
-          if (game.poisonTrails.length < 80) {
-            game.poisonTrails.push({
+          if (players[0].poisonTrails.length < 80) {
+            players[0].poisonTrails.push({
               x: dz.x + (Math.random() - 0.5) * dz.radius,
               y: dz.y + (Math.random() - 0.5) * dz.radius,
               life: 240,
@@ -2588,12 +2604,14 @@ function update() {
         spawnParticles(dz.x, dz.y, 15, '#ffaa22', 3);
         game.shakeTimer = 4;
       }
-      // Damage player
-      if (player.invincible <= 0 && dist2(player, dz) < dz.radius * dz.radius) {
-        player.hp -= dz.damage;
-        player.invincible = 30;
-        game.damageFlash = 10;
-        Sound.hit();
+      // Damage all players
+      for (const pp of players) {
+        if (!pp.dead && pp.invincible <= 0 && dist2(pp, dz) < dz.radius * dz.radius) {
+          pp.hp -= dz.damage;
+          pp.invincible = 30;
+          pp.damageFlash = 10;
+          Sound.hit();
+        }
       }
       // Damage enemies too
       for (const e of enemies) {
@@ -2635,7 +2653,8 @@ function update() {
       game.shakeTimer = 20;
       game.lightningFlash = 12;
       Sound.thunder();
-      spawnParticles(player.x, player.y, 30, '#ff44ff', 5);
+      const megaTarget = players.find(p => !p.dead) || players[0];
+      spawnParticles(megaTarget.x, megaTarget.y, 30, '#ff44ff', 5);
     }
   }
 
@@ -2649,23 +2668,33 @@ function update() {
     }
   }
 
-  // Update drops
+  // Update drops (check pickup by nearest alive player)
   for (let i = drops.length - 1; i >= 0; i--) {
     const dr = drops[i];
     dr.age++;
     if (dr.life > 0) dr.life--;
     dr.bobTimer += 0.08;
     if (dr.life === 0) { drops.splice(i, 1); continue; }
-    // XP orbs despawn after 30s if far from player (perf)
+    // XP orbs despawn after 30s if far from all players
     if (dr.type === 'xp' && dr.age > 30 * FPS) {
-      const farDist = dist2(player, dr);
-      if (farDist > 200 * 200) { drops.splice(i, 1); continue; }
+      const anyClose = players.some(p => !p.dead && dist2(p, dr) < 200 * 200);
+      if (!anyClose) { drops.splice(i, 1); continue; }
     }
 
-    const ddx = player.x - dr.x, ddy = player.y - dr.y;
-    const ddist = Math.sqrt(ddx * ddx + ddy * ddy);
+    // Find nearest alive player for magnet/pickup
+    let nearDr: PlayerState | null = null;
+    let nearDrDist = Infinity;
+    for (const pp of players) {
+      if (pp.dead) continue;
+      const d = Math.sqrt(dist2(pp, dr));
+      if (d < nearDrDist) { nearDrDist = d; nearDr = pp; }
+    }
+    if (!nearDr) continue;
 
-    // Magnet pulse pull (super rare — strong pull for 1s)
+    const ddx = nearDr.x - dr.x, ddy = nearDr.y - dr.y;
+    const ddist = nearDrDist;
+
+    // Magnet pulse pull
     if ((dr as any)._magnetPull > 0) {
       (dr as any)._magnetPull--;
       const pullForce = 6;
@@ -2674,9 +2703,9 @@ function update() {
         dr.y += (ddy / ddist) * pullForce;
       }
     }
-    // Normal magnet pull — only if player has pickup upgrades
-    const hasMagnet = (game.upgradeLevels.get('pickup_radius') || 0) > 0;
-    if (hasMagnet && ddist < game.magnetRadius) {
+    // Normal magnet pull
+    const hasMagnet = (nearDr.upgradeLevels.get('pickup_radius') || 0) > 0;
+    if (hasMagnet && ddist < nearDr.magnetRadius) {
       const pull = dr.type === 'xp' ? 4 : 2.5;
       if (ddist > 2) {
         dr.x += (ddx / ddist) * pull;
@@ -2684,25 +2713,23 @@ function update() {
       }
     }
 
-    if (ddist < game.pickupRadius) {
+    if (ddist < nearDr.pickupRadius) {
       if (dr.type === 'xp') {
-        game.xp += dr.value;
+        nearDr.xp += dr.value;
         spawnParticles(dr.x, dr.y, 5, COL.xpOrb, 1);
-        // Queue all level ups
-        while (game.xp >= game.xpToLevel) {
-          game.xp -= game.xpToLevel;
-          game.level++;
-          game.xpToLevel = Math.floor(game.xpToLevel * 1.15);
-          game.pendingLevelUps++;
+        while (nearDr.xp >= nearDr.xpToLevel) {
+          nearDr.xp -= nearDr.xpToLevel;
+          nearDr.level++;
+          nearDr.xpToLevel = Math.floor(nearDr.xpToLevel * 1.15);
+          nearDr.pendingLevelUps++;
         }
-        // Open first level up if not already in a selection
-        if (game.pendingLevelUps > 0 && game.state === 'playing') {
-          game.pendingLevelUps--;
-          openSelection('levelup');
+        if (nearDr.pendingLevelUps > 0 && game.state === 'playing') {
+          nearDr.pendingLevelUps--;
+          openSelection('levelup', nearDr.playerIndex);
         }
       } else if (dr.type === 'heart') {
-        if (player.hp < player.maxHp) {
-          player.hp = Math.min(player.hp + dr.value, player.maxHp);
+        if (nearDr.hp < nearDr.maxHp) {
+          nearDr.hp = Math.min(nearDr.hp + dr.value, nearDr.maxHp);
           spawnParticles(dr.x, dr.y, 8, COL.heartDrop, 1.5);
         } else {
           continue;
@@ -2720,12 +2747,18 @@ function update() {
       if (ch.openTimer <= 0) chests.splice(i, 1);
       continue;
     }
-    const ddx = player.x - ch.x, ddy = player.y - ch.y;
-    if (ddx * ddx + ddy * ddy < 14 * 14) {
+    // Check all players for chest proximity
+    let chestOpener = -1;
+    for (const pp of players) {
+      if (pp.dead) continue;
+      const cddx = pp.x - ch.x, cddy = pp.y - ch.y;
+      if (cddx * cddx + cddy * cddy < 14 * 14) { chestOpener = pp.playerIndex; break; }
+    }
+    if (chestOpener >= 0) {
       ch.opened = true;
       ch.openTimer = 60;
       spawnParticles(ch.x, ch.y, 25, ch.rarity === 'rare' ? COL.chestRare : COL.chestLock, 3);
-      openSelection(ch.rarity === 'skill' ? 'skill_select' : ch.rarity === 'rare' ? 'chest_rare' : 'chest_common');
+      openSelection(ch.rarity === 'skill' ? 'skill_select' : ch.rarity === 'rare' ? 'chest_rare' : 'chest_common', chestOpener);
       // Drop bonus XP
       for (let j = 0; j < 8; j++) {
         const angle = Math.random() * Math.PI * 2;
@@ -2755,65 +2788,72 @@ function update() {
 
   // 5 minute death wall
   if (game.time >= GAME_DURATION) {
-    player.hp = 0;
+    for (const pp of players) pp.hp = 0;
   }
 
-  // Clamp HP (prevent negative display, cap overheal)
-  if (!game.activeCombos.includes('second_life')) {
-    player.hp = Math.min(player.hp, player.maxHp);
-  } else {
-    const slShield = 20 + (game.upgradeLevels.get('max_hp') || 0) * 5 + weapon.size * 2;
-    player.hp = Math.min(player.hp, player.maxHp + slShield);
+  // Per-player HP clamp, second wind, death
+  for (const pp of players) {
+    if (pp.dead) continue;
+    // Clamp HP
+    if (!pp.activeCombos.includes('second_life')) {
+      pp.hp = Math.min(pp.hp, pp.maxHp);
+    } else {
+      const slShield = 20 + (pp.upgradeLevels.get('max_hp') || 0) * 5 + pp.weapon.size * 2;
+      pp.hp = Math.min(pp.hp, pp.maxHp + slShield);
+    }
+    // Second wind check
+    if (pp.hp <= 0 && pp.activeSuperRares.includes('second_wind') && !pp.secondWindUsed) {
+      pp.secondWindUsed = true;
+      pp.hp = Math.floor(pp.maxHp * 0.3);
+      pp.invincible = 120;
+      spawnParticles(pp.x, pp.y, 40, '#ffffff', 5);
+      spawnParticles(pp.x, pp.y, 30, '#44ff44', 4);
+      pp.damageFlash = 0;
+    }
+    // Mark player dead
+    if (pp.hp <= 0) {
+      pp.dead = true;
+      // Death explosion
+      for (let ring = 0; ring < 3; ring++) {
+        for (let a = 0; a < 16; a++) {
+          const angle = (a / 16) * Math.PI * 2;
+          particles.push({
+            x: pp.x, y: pp.y,
+            dx: Math.cos(angle) * (2 + ring * 2), dy: Math.sin(angle) * (2 + ring * 2),
+            life: 20 + ring * 5, maxLife: 25 + ring * 5,
+            color: ring % 2 === 0 ? pp.visorColor : '#ffffff', size: 3,
+          });
+        }
+      }
+      spawnParticles(pp.x, pp.y, 30, pp.visorColor, 5);
+      game.shakeTimer = 12;
+    }
   }
 
-  // Second wind check
-  if (player.hp <= 0 && game.activeSuperRares.includes('second_wind') && !game.secondWindUsed) {
-    game.secondWindUsed = true;
-    player.hp = Math.floor(player.maxHp * 0.3);
-    player.invincible = 120; // 2s invincible
-    spawnParticles(player.x, player.y, 40, '#ffffff', 5);
-    spawnParticles(player.x, player.y, 30, '#44ff44', 4);
-    game.damageFlash = 0;
-  }
-
-  // Game over — HERO DEATH EXPLOSION
-  if (player.hp <= 0) {
+  // Game over only when ALL players dead
+  const allDead = players.every(p => p.dead);
+  if (allDead) {
     game.state = 'gameover';
     game.deathScreenTimer = 0;
     game.won = game.time >= GAME_DURATION;
     if (game.won) Sound.victory(); else Sound.gameOver();
     Music.stop();
 
-    // Massive death nova — kill all visible enemies
-    const camX = player.x - VIEW_W / 2;
-    const camY = player.y - VIEW_H / 2;
+    // Massive death nova — kill all visible enemies (use midpoint)
+    const midPX = (players[0].x + players[1].x) / 2;
+    const midPY = (players[0].y + players[1].y) / 2;
+    const camXGO = midPX - VIEW_W / 2;
+    const camYGO = midPY - VIEW_H / 2;
     for (const e of enemies) {
-      const sx = e.x - camX, sy = e.y - camY;
+      const sx = e.x - camXGO, sy = e.y - camYGO;
       if (sx > -20 && sx < VIEW_W + 20 && sy > -20 && sy < VIEW_H + 20) {
         e.hp = 0;
         spawnParticles(e.x, e.y, 5, '#ff4488', 3);
       }
     }
-    // Clean up dead enemies (no loot — it's a death, not a kill)
     for (let i = enemies.length - 1; i >= 0; i--) {
       if (enemies[i].hp <= 0) enemies.splice(i, 1);
     }
-
-    // Epic explosion rings
-    for (let ring = 0; ring < 5; ring++) {
-      for (let a = 0; a < 24; a++) {
-        const angle = (a / 24) * Math.PI * 2;
-        particles.push({
-          x: player.x, y: player.y,
-          dx: Math.cos(angle) * (2 + ring * 2.5), dy: Math.sin(angle) * (2 + ring * 2.5),
-          life: 30 + ring * 8, maxLife: 40 + ring * 8,
-          color: ring % 2 === 0 ? COL.playerVisor : '#ffffff',
-          size: 4 - ring * 0.5,
-        });
-      }
-    }
-    spawnParticles(player.x, player.y, 50, COL.playerVisor, 8);
-    spawnParticles(player.x, player.y, 30, '#ffffff', 5);
     game.shakeTimer = 20;
   }
 
@@ -2837,8 +2877,8 @@ function getSortedSelectionMap(): number[] {
   indices.sort((a, b) => {
     const aOpt = game.selectionOptions[a];
     const bOpt = game.selectionOptions[b];
-    const aOwned = 'apply' in aOpt && game.upgradeLevels.has((aOpt as Upgrade).id) ? 1 : 0;
-    const bOwned = 'apply' in bOpt && game.upgradeLevels.has((bOpt as Upgrade).id) ? 1 : 0;
+    const aOwned = 'apply' in aOpt && players[game.selectingPlayer].upgradeLevels.has((aOpt as Upgrade).id) ? 1 : 0;
+    const bOwned = 'apply' in bOpt && players[game.selectingPlayer].upgradeLevels.has((bOpt as Upgrade).id) ? 1 : 0;
     return bOwned - aOwned;
   });
   return indices; // sortedMap[visualPos] = originalIndex
@@ -2868,10 +2908,16 @@ function updateSelection() {
   if (mouse.clicked && game.selectionHover >= 0) {
     selectOption(game.selectionHover);
   }
-  // Keys 1/2/3 select by visual position
+  // Keys 1/2/3 or numpad select by visual position
   if (keys['1'] || keys['&']) { if (sortedMap[0] !== undefined) selectOption(sortedMap[0]); keys['1'] = false; keys['&'] = false; }
   if (keys['2'] || keys['é']) { if (sortedMap[1] !== undefined) selectOption(sortedMap[1]); keys['2'] = false; keys['é'] = false; }
   if (keys['3'] || keys['"']) { if (sortedMap[2] !== undefined) selectOption(sortedMap[2]); keys['3'] = false; keys['"'] = false; }
+  // P2 arrow key navigation
+  if (game.selectingPlayer === 1) {
+    if (keys['arrowleft']) { game.selectionHover = Math.max(0, (game.selectionHover < 0 ? 0 : game.selectionHover) - 1); keys['arrowleft'] = false; }
+    if (keys['arrowright']) { game.selectionHover = Math.min(sortedMap.length - 1, (game.selectionHover < 0 ? 0 : game.selectionHover) + 1); keys['arrowright'] = false; }
+    if (keys['enter'] && game.selectionHover >= 0) { selectOption(sortedMap[game.selectionHover] ?? game.selectionHover); keys['enter'] = false; }
+  }
 
   mouse.clicked = false;
 }
@@ -2909,7 +2955,6 @@ function onEnemyKill(e: Enemy, index: number) {
   // Exploder: AoE explosion on death
   if (e.type === 'exploder') {
     const explR = 35;
-    // Big boom visual
     for (let a = 0; a < 16; a++) {
       const angle = (a / 16) * Math.PI * 2;
       particles.push({
@@ -2920,48 +2965,42 @@ function onEnemyKill(e: Enemy, index: number) {
       });
     }
     spawnParticles(e.x, e.y, 20, '#ff4400', 5);
-    // Damage nearby enemies AND player
     for (const ne of enemies) {
       if (ne === e || ne.hp <= 0) continue;
-      if (dist2({ x: e.x, y: e.y }, ne) < explR * explR) {
-        ne.hp -= 5;
-        ne.hitFlash = 8;
+      if (dist2({ x: e.x, y: e.y }, ne) < explR * explR) { ne.hp -= 5; ne.hitFlash = 8; }
+    }
+    // Damage all players if close
+    for (const pp of players) {
+      if (!pp.dead && pp.invincible <= 0 && dist2({ x: e.x, y: e.y }, pp) < explR * explR) {
+        pp.hp -= 10; pp.invincible = 30; pp.damageFlash = 8; game.shakeTimer = 6;
       }
     }
-    // Damage player if close
-    if (player.invincible <= 0 && dist2({ x: e.x, y: e.y }, player) < explR * explR) {
-      player.hp -= 10;
-      player.invincible = 30;
-      game.damageFlash = 8;
-      game.shakeTimer = 6;
-    }
   }
 
-  // Life steal (upgrade) — nerfed: 1% per level, heals 1 HP
-  const lsLv = game.upgradeLevels.get('life_steal') || 0;
-  if (lsLv > 0 && Math.random() < lsLv * 0.01) {
-    // SECOND LIFE combo — overheal shield scales with vitality + caliber
-    if (game.activeCombos.includes('second_life')) {
-      const shieldCap = 20 + (game.upgradeLevels.get('max_hp') || 0) * 5 + weapon.size * 2;
-      player.hp = Math.min(player.hp + 1, player.maxHp + shieldCap);
-    } else {
-      player.hp = Math.min(player.hp + 1, player.maxHp);
+  // Life steal and affix effects for all alive players
+  for (const pp of players) {
+    if (pp.dead) continue;
+    const lsLv = pp.upgradeLevels.get('life_steal') || 0;
+    if (lsLv > 0 && Math.random() < lsLv * 0.01) {
+      if (pp.activeCombos.includes('second_life')) {
+        const shieldCap = 20 + (pp.upgradeLevels.get('max_hp') || 0) * 5 + pp.weapon.size * 2;
+        pp.hp = Math.min(pp.hp + 1, pp.maxHp + shieldCap);
+      } else {
+        pp.hp = Math.min(pp.hp + 1, pp.maxHp);
+      }
+      spawnParticles(pp.x, pp.y, 2, '#44ff44', 1);
     }
-    spawnParticles(player.x, player.y, 2, '#44ff44', 1);
-  }
+    applyAffixOnKill(e.x, e.y, pp);
 
-  // Affix life steal
-  applyAffixOnKill(e.x, e.y);
-
-  // Nova on kill (damage only, no recursive onEnemyKill to avoid crash)
-  if (game.activeSuperRares.includes('nova_on_kill') && Math.random() < game.novaOnKillChance) {
-    spawnParticles(e.x, e.y, 25, '#ff4488', 4);
-    const novaR = 35;
-    for (const ne of enemies) {
-      if (ne === e || ne.hp <= 0) continue;
-      if (dist2({ x: e.x, y: e.y }, ne) < novaR * novaR) {
-        ne.hp -= weapon.damage * 2;
-        ne.hitFlash = 8;
+    // Nova on kill
+    if (pp.activeSuperRares.includes('nova_on_kill') && Math.random() < pp.novaOnKillChance) {
+      spawnParticles(e.x, e.y, 25, '#ff4488', 4);
+      const novaR = 35;
+      for (const ne of enemies) {
+        if (ne === e || ne.hp <= 0) continue;
+        if (dist2({ x: e.x, y: e.y }, ne) < novaR * novaR) {
+          ne.hp -= pp.weapon.damage * 2; ne.hitFlash = 8;
+        }
       }
     }
   }
@@ -2982,18 +3021,13 @@ function onEnemyKill(e: Enemy, index: number) {
 }
 
 function resetGame() {
-  Music.setTrack(0); // restart from calm track
+  Music.setTrack(0);
   Music.start();
   game.time = 0;
   game.state = 'playing';
   game.kills = 0;
-  game.xp = 0;
-  game.xpToLevel = 10;
-  game.level = 1;
   game.deathScreenTimer = 0;
   game.won = false;
-  game.pickupRadius = 16;
-  game.magnetRadius = 20;
   game.miniBossTimer = 30 * FPS;
   game.bossTimer = 60 * FPS;
   game.miniBossCount = 0;
@@ -3001,58 +3035,21 @@ function resetGame() {
   game.superBossSpawned = false;
   game.megaBossSpawned = false;
   game.superBossTimer = Math.floor(2.5 * 60 * FPS);
-  game.pendingLevelUps = 0;
-  game.activeCombos = [];
   game.codexOpen = false;
   game.selectionOptions = [];
-  game.upgradeLevels = new Map();
-  game.activeAffixes = [];
-  game.activeSuperRares = [];
-  game.orbitalAngle = 0;
-  game.bladeStormAngle = 0;
-  game.novaOrbActive = null;
-  game.shockwaveTimer = 0;
-  game.meteorTimer = 0;
-  game.carpetBombTimer = 0;
-  game.sniperTimer = 0;
-  game.railgunTimer = 0;
-  game.bulletTimeTimer = 0;
-  game.bulletTimeActive = 0;
-  game.droneAngle = 0;
-  game.droneCount = 0;
-  game.shadowClone = null;
-  game.thunderTimer = 0;
-  game.poisonTrails = [];
-  game.secondWindUsed = false;
-  game.shieldOrbTimer = 0;
-  game.shieldOrbActive = true;
-  game.magnetPulseTimer = 0;
-  game.activeSkill = null;
-  game.skillCooldown = 0;
-  game.skillActive = 0;
-  game.dashDx = 0;
-  game.dashDy = 0;
-  game.ghostTrail = [];
+  game.selectingPlayer = 0;
   game.freezeFrame = 0;
   game.freezeZoom = 0;
   game.lightningTimer = 300 + Math.floor(Math.random() * 300);
   game.lightningFlash = 0;
+  game.shakeTimer = 0;
 
-  weapon.fireRate = 35;
-  weapon.speed = 4;
-  weapon.damage = 1;
-  weapon.size = 3;
-  weapon.pierce = 0;
-  weapon.count = 1;
-  weapon.spread = 0;
-
-  player.hp = 100;
-  player.maxHp = 100;
-  player.speed = 1.5;
-  player.x = MAP_W / 2 * TILE + 8;
-  player.y = MAP_H / 2 * TILE + 8;
-  player.invincible = 0;
-  player.shootCooldown = 0;
+  // Reset both players
+  for (let i = 0; i < 2; i++) {
+    players[i] = createPlayer(i);
+  }
+  player = players[0];
+  weapon = players[0].weapon;
   enemies.length = 0;
   lasers.length = 0;
   particles.length = 0;
@@ -3162,6 +3159,60 @@ function drawPlayer(sx: number, sy: number) {
   // Legs
   const legOffset = player.moving ? Math.sin(player.animTimer * 0.5) * 2 : 0;
   bx.fillStyle = '#22203a';
+  bx.fillRect(px - 3, py + 5, 2, 3 + legOffset);
+  bx.fillRect(px + 1, py + 5, 2, 3 - legOffset);
+}
+
+function drawPlayerCoOp(ps: PlayerState, sx: number, sy: number) {
+  const flash = ps.invincible > 0 && Math.floor(ps.invincible / 3) % 2 === 0;
+  if (flash) return;
+  const px = Math.floor(sx), py = Math.floor(sy);
+
+  // Subtle aura glow
+  bx.fillStyle = ps.visorColor;
+  bx.globalAlpha = 0.08 + Math.sin(game.time * 0.05) * 0.04;
+  bx.fillRect(px - 8, py - 10, 16, 18);
+  bx.globalAlpha = 1;
+
+  // Cape/cloak
+  if (ps.dir === 'down' || ps.dir === 'left' || ps.dir === 'right') {
+    bx.fillStyle = ps.playerIndex === 0 ? COL.playerCape : '#1a3040';
+    const capeWave = Math.sin(game.time * 0.08) * 1;
+    bx.fillRect(px - 4, py - 2, 8, 10 + capeWave);
+  }
+  // Body armor
+  bx.fillStyle = ps.playerIndex === 0 ? COL.playerArmor : '#4a5a6a';
+  bx.fillRect(px - 4, py - 5, 8, 10);
+  // Head
+  bx.fillStyle = ps.playerIndex === 0 ? '#2a2840' : '#2a3840';
+  bx.fillRect(px - 3, py - 8, 6, 5);
+  // Glowing visor
+  bx.fillStyle = ps.visorColor;
+  switch (ps.dir) {
+    case 'down':
+      bx.fillRect(px - 2, py - 7, 4, 1);
+      bx.fillRect(px, py - 6, 1, 2);
+      break;
+    case 'up':
+      bx.fillRect(px - 2, py - 7, 4, 1);
+      break;
+    case 'left':
+      bx.fillRect(px - 3, py - 7, 3, 1);
+      bx.fillRect(px - 3, py - 6, 1, 2);
+      break;
+    case 'right':
+      bx.fillRect(px, py - 7, 3, 1);
+      bx.fillRect(px + 2, py - 6, 1, 2);
+      break;
+  }
+  // P2 indicator
+  if (ps.playerIndex === 1) {
+    bx.fillStyle = ps.visorColor;
+    bx.fillRect(px - 1, py - 11, 2, 1);
+  }
+  // Legs
+  const legOffset = ps.moving ? Math.sin(ps.animTimer * 0.5) * 2 : 0;
+  bx.fillStyle = ps.playerIndex === 0 ? '#22203a' : '#203040';
   bx.fillRect(px - 3, py + 5, 2, 3 + legOffset);
   bx.fillRect(px + 1, py + 5, 2, 3 - legOffset);
 }
@@ -3619,10 +3670,14 @@ function render() {
     shakeY = (Math.random() - 0.5) * game.shakeTimer;
     game.shakeTimer--;
   }
-  if (game.damageFlash > 0) game.damageFlash--;
+  // damageFlash decremented in per-player loop
 
-  const camX = Math.floor(player.x - VIEW_W / 2 + shakeX);
-  const camY = Math.floor(player.y - VIEW_H / 2 + shakeY);
+  // Camera follows midpoint of alive players
+  const aliveCamPlayers = players.filter(p => !p.dead);
+  const camMidX = aliveCamPlayers.length > 0 ? aliveCamPlayers.reduce((s, p) => s + p.x, 0) / aliveCamPlayers.length : players[0].x;
+  const camMidY = aliveCamPlayers.length > 0 ? aliveCamPlayers.reduce((s, p) => s + p.y, 0) / aliveCamPlayers.length : players[0].y;
+  const camX = Math.floor(camMidX - VIEW_W / 2 + shakeX);
+  const camY = Math.floor(camMidY - VIEW_H / 2 + shakeY);
 
   bx.fillStyle = COL.sky;
   bx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -3678,8 +3733,9 @@ function render() {
     const esx = we.x - camX, esy = we.y - camY;
     if (esx < -sz * 2 || esx > VIEW_W + sz * 2 || esy < -sz * 2 || esy > VIEW_H + sz * 2) continue;
 
-    // Pupil tracks player
-    const edx = player.x - we.x, edy = player.y - we.y;
+    // Pupil tracks nearest player
+    const eyeTarget = players.reduce((best, p) => dist2(p, we) < dist2(best, we) ? p : best, players[0]);
+    const edx = eyeTarget.x - we.x, edy = eyeTarget.y - we.y;
     const ed = Math.sqrt(edx * edx + edy * edy);
     const maxLook = sz * 0.2;
     const lookX = ed > 0 ? (edx / ed) * maxLook : 0;
@@ -3836,10 +3892,11 @@ function render() {
     }
   }
 
-  // Poison trail / fire ground
-  const hasMeteor = game.activeCombos.includes('meteor');
-  const hasPoison = game.activeSuperRares.includes('poison_trail');
-  for (const pt of game.poisonTrails) {
+  // Poison trail / fire ground (from all players)
+  const hasMeteor = players.some(p => p.activeCombos.includes('meteor'));
+  const hasPoison = players.some(p => p.activeSuperRares.includes('poison_trail'));
+  const allPoisonTrails = players.flatMap(p => p.poisonTrails);
+  for (const pt of allPoisonTrails) {
     const ptx = pt.x - camX, pty = pt.y - camY;
     if (ptx > -10 && ptx < VIEW_W + 10 && pty > -10 && pty < VIEW_H + 10) {
       const fade = Math.min(0.6, pt.life / 300);
@@ -3865,56 +3922,64 @@ function render() {
     }
   }
 
-  // Ghost trail (afterimages)
-  for (const g of game.ghostTrail) {
-    const gx = g.x - camX, gy = g.y - camY;
-    const alpha = Math.max(0, 0.25 - g.age * 0.01);
-    if (alpha > 0) {
-      bx.globalAlpha = alpha;
-      bx.fillStyle = COL.playerVisor;
-      bx.fillRect(Math.floor(gx) - 4, Math.floor(gy) - 5, 8, 10);
-      bx.fillRect(Math.floor(gx) - 3, Math.floor(gy) - 8, 6, 5);
-      bx.globalAlpha = 1;
+  // Ghost trail (afterimages) — both players
+  for (const pp of players) {
+    if (pp.dead) continue;
+    for (const g of pp.ghostTrail) {
+      const gx = g.x - camX, gy = g.y - camY;
+      const alpha = Math.max(0, 0.25 - g.age * 0.01);
+      if (alpha > 0) {
+        bx.globalAlpha = alpha;
+        bx.fillStyle = pp.visorColor;
+        bx.fillRect(Math.floor(gx) - 4, Math.floor(gy) - 5, 8, 10);
+        bx.fillRect(Math.floor(gx) - 3, Math.floor(gy) - 8, 6, 5);
+        bx.globalAlpha = 1;
+      }
     }
   }
 
-  // Player
-  if (game.state !== 'gameover') drawPlayer(player.x - camX, player.y - camY);
-
-  // Shield orb visual
-  if (game.activeSuperRares.includes('shield_orb') && game.shieldOrbActive) {
-    const px = player.x - camX, py = player.y - camY;
-    bx.strokeStyle = '#44aaff';
-    bx.globalAlpha = 0.4 + Math.sin(game.time * 0.1) * 0.2;
-    bx.beginPath();
-    bx.arc(Math.floor(px), Math.floor(py), 12, 0, Math.PI * 2);
-    bx.stroke();
-    bx.globalAlpha = 1;
+  // Draw both players
+  for (const pp of players) {
+    if (pp.dead) continue;
+    if (game.state !== 'gameover') drawPlayerCoOp(pp, pp.x - camX, pp.y - camY);
   }
 
-  // Skill active visual (barrier)
-  if (game.skillActive > 0 && game.activeSkill?.id === 'shield_skill') {
-    const px = player.x - camX, py = player.y - camY;
-    bx.strokeStyle = '#4488ff';
-    bx.globalAlpha = 0.6;
-    bx.lineWidth = 2;
-    bx.beginPath();
-    bx.arc(Math.floor(px), Math.floor(py), 16, 0, Math.PI * 2);
-    bx.stroke();
-    bx.lineWidth = 1;
-    bx.globalAlpha = 1;
-  }
-
-  // Drones
-  if (game.droneCount > 0) {
-    for (let i = 0; i < game.droneCount; i++) {
-      const angle = game.droneAngle + (i / game.droneCount) * Math.PI * 2;
-      const dx = player.x + Math.cos(angle) * 40 - camX;
-      const dy = player.y + Math.sin(angle) * 40 - camY;
-      bx.fillStyle = '#44ccff';
-      bx.fillRect(Math.floor(dx) - 3, Math.floor(dy) - 3, 6, 6);
-      bx.fillStyle = '#88ddff';
-      bx.fillRect(Math.floor(dx) - 1, Math.floor(dy) - 1, 2, 2);
+  // Per-player visuals (shield orb, skill, drones)
+  for (const pp of players) {
+    if (pp.dead) continue;
+    // Shield orb visual
+    if (pp.activeSuperRares.includes('shield_orb') && pp.shieldOrbActive) {
+      const px = pp.x - camX, py = pp.y - camY;
+      bx.strokeStyle = '#44aaff';
+      bx.globalAlpha = 0.4 + Math.sin(game.time * 0.1) * 0.2;
+      bx.beginPath();
+      bx.arc(Math.floor(px), Math.floor(py), 12, 0, Math.PI * 2);
+      bx.stroke();
+      bx.globalAlpha = 1;
+    }
+    // Skill active visual (barrier)
+    if (pp.skillActive > 0 && pp.activeSkill?.id === 'shield_skill') {
+      const px = pp.x - camX, py = pp.y - camY;
+      bx.strokeStyle = '#4488ff';
+      bx.globalAlpha = 0.6;
+      bx.lineWidth = 2;
+      bx.beginPath();
+      bx.arc(Math.floor(px), Math.floor(py), 16, 0, Math.PI * 2);
+      bx.stroke();
+      bx.lineWidth = 1;
+      bx.globalAlpha = 1;
+    }
+    // Drones
+    if (pp.droneCount > 0) {
+      for (let i = 0; i < pp.droneCount; i++) {
+        const angle = pp.droneAngle + (i / pp.droneCount) * Math.PI * 2;
+        const dx = pp.x + Math.cos(angle) * 40 - camX;
+        const dy = pp.y + Math.sin(angle) * 40 - camY;
+        bx.fillStyle = '#44ccff';
+        bx.fillRect(Math.floor(dx) - 3, Math.floor(dy) - 3, 6, 6);
+        bx.fillStyle = '#88ddff';
+        bx.fillRect(Math.floor(dx) - 1, Math.floor(dy) - 1, 2, 2);
+      }
     }
   }
 
@@ -3949,15 +4014,15 @@ function render() {
   bx.lineWidth = 1;
   bx.globalCompositeOperation = 'source-over';
 
-  // ══ DEATH RAY visual — continuous beam to nearest enemy ══
-  let rayTarget: Enemy | null = null;
-  if (game.activeCombos.includes('death_ray')) {
+  // ══ DEATH RAY visual — per player ══
+  for (const pp of players) {
+    if (pp.dead || !pp.activeCombos.includes('death_ray')) continue;
+    let rayTarget: Enemy | null = null;
     let rtDist = 250 * 250;
-    for (const e of enemies) { const d = dist2(player, e); if (d < rtDist) { rtDist = d; rayTarget = e; } }
-  }
+    for (const e of enemies) { const d = dist2(pp, e); if (d < rtDist) { rtDist = d; rayTarget = e; } }
   if (rayTarget) {
-    const px = player.x - camX, py = player.y - camY;
-    const aim = aimDir(player, rayTarget);
+    const px = pp.x - camX, py = pp.y - camY;
+    const aim = aimDir(pp, rayTarget);
     const rayLen = 300 + weapon.pierce * 40;
     const ex = px + aim.x * rayLen, ey = py + aim.y * rayLen;
     bx.globalCompositeOperation = 'lighter';
@@ -3979,6 +4044,7 @@ function render() {
     bx.globalAlpha = 1; bx.lineWidth = 1;
     bx.globalCompositeOperation = 'source-over';
   }
+  } // end death ray per-player loop
 
   // ══ BEAM LINES visual (sniper, railgun) ══
   bx.globalCompositeOperation = 'lighter';
@@ -4004,9 +4070,10 @@ function render() {
   bx.globalAlpha = 1; bx.lineWidth = 1;
   bx.globalCompositeOperation = 'source-over';
 
-  // ══ SECOND LIFE visual — golden overheal shield ══
-  if (game.activeCombos.includes('second_life') && player.hp > player.maxHp) {
-    const px = player.x - camX, py = player.y - camY;
+  // ══ SECOND LIFE visual — golden overheal shield (both players) ══
+  for (const pp of players) {
+    if (pp.dead || !pp.activeCombos.includes('second_life') || pp.hp <= pp.maxHp) continue;
+    const px = pp.x - camX, py = pp.y - camY;
     const shieldAlpha = 0.2 + Math.sin(game.time * 0.08) * 0.1;
     bx.globalCompositeOperation = 'lighter';
     bx.strokeStyle = '#ffcc44';
@@ -4022,12 +4089,13 @@ function render() {
     bx.fill();
     bx.globalAlpha = 1; bx.lineWidth = 1;
     bx.globalCompositeOperation = 'source-over';
-  }
+  } // end second life per-player
 
-  // ══ WARP FIELD visual — swirling vortex ══
-  if (game.activeCombos.includes('warp_field')) {
-    const px = player.x - camX, py = player.y - camY;
-    const wfRange = 60 + (game.upgradeLevels.get('pickup_radius') || 0) * 15;
+  // ══ WARP FIELD visual — swirling vortex (both players) ══
+  for (const pp of players) {
+    if (pp.dead || !pp.activeCombos.includes('warp_field')) continue;
+    const px = pp.x - camX, py = pp.y - camY;
+    const wfRange = 60 + (pp.upgradeLevels.get('pickup_radius') || 0) * 15;
     bx.globalCompositeOperation = 'lighter';
     bx.strokeStyle = '#cc88ff';
     bx.globalAlpha = 0.15;
@@ -4041,10 +4109,10 @@ function render() {
     }
     bx.globalAlpha = 1; bx.lineWidth = 1;
     bx.globalCompositeOperation = 'source-over';
-  }
+  } // end warp field per-player
 
   // ══ BULLET TIME visual — blue overlay when active ══
-  if (game.bulletTimeActive > 0) {
+  if (players.some(p => p.bulletTimeActive > 0)) {
     bx.fillStyle = '#112244';
     bx.globalAlpha = 0.15 + Math.sin(game.time * 0.1) * 0.05;
     bx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -4154,9 +4222,10 @@ function render() {
     bx.lineWidth = 1;
   }
 
-  // ══ BLACK HOLE visual — grows then implodes ══
-  if (game.novaOrbActive) {
-    const orb = game.novaOrbActive as any;
+  // ══ BLACK HOLE visual — grows then implodes (both players) ══
+  for (const pp of players) {
+  if (pp.novaOrbActive) {
+    const orb = pp.novaOrbActive as any;
     const ox = orb.x - camX, oy = orb.y - camY;
     const r = orb.currentRadius || 5;
     const isGrowing = orb.dx === 0 && orb.dy === 0;
@@ -4254,14 +4323,17 @@ function render() {
     bx.lineWidth = 1;
     bx.globalCompositeOperation = 'source-over';
   }
+  } // end black hole per-player
 
-  // Orbital orbs (visible glowing spheres)
-  const orbLv = game.upgradeLevels.get('orbital') || 0;
-  if (orbLv > 0) {
+  // Orbital orbs (both players)
+  for (const pp of players) {
+    if (pp.dead) continue;
+    const orbLv = pp.upgradeLevels.get('orbital') || 0;
+    if (orbLv > 0) {
     for (let oi = 0; oi < orbLv; oi++) {
-      const angle = game.orbitalAngle + (oi / orbLv) * Math.PI * 2;
-      const ox = player.x + Math.cos(angle) * 30 - camX;
-      const oy = player.y + Math.sin(angle) * 30 - camY;
+      const angle = pp.orbitalAngle + (oi / orbLv) * Math.PI * 2;
+      const ox = pp.x + Math.cos(angle) * 30 - camX;
+      const oy = pp.y + Math.sin(angle) * 30 - camY;
       // Glow
       bx.fillStyle = '#6666ff';
       bx.globalAlpha = 0.3 + Math.sin(game.time * 0.1 + oi) * 0.15;
@@ -4274,18 +4346,20 @@ function render() {
       bx.fillRect(Math.floor(ox) - 1, Math.floor(oy) - 1, 3, 3);
       // Trail
       const trailAngle = angle - 0.3;
-      const tx = player.x + Math.cos(trailAngle) * 30 - camX;
-      const ty = player.y + Math.sin(trailAngle) * 30 - camY;
+      const tx = pp.x + Math.cos(trailAngle) * 30 - camX;
+      const ty = pp.y + Math.sin(trailAngle) * 30 - camY;
       bx.fillStyle = '#6666ff';
       bx.globalAlpha = 0.3;
       bx.fillRect(Math.floor(tx) - 2, Math.floor(ty) - 2, 4, 4);
       bx.globalAlpha = 1;
     }
   }
+  } // end orbital per-player
 
-  // Shadow clone
-  if (game.shadowClone) {
-    const scx = game.shadowClone.x - camX, scy = game.shadowClone.y - camY;
+  // Shadow clone (both players)
+  for (const pp of players) {
+  if (pp.shadowClone) {
+    const scx = pp.shadowClone.x - camX, scy = pp.shadowClone.y - camY;
     bx.globalAlpha = 0.5;
     bx.fillStyle = '#8844cc';
     bx.fillRect(Math.floor(scx) - 4, Math.floor(scy) - 5, 8, 10);
@@ -4295,6 +4369,7 @@ function render() {
     bx.fillRect(Math.floor(scx) - 2, Math.floor(scy) - 7, 4, 1);
     bx.globalAlpha = 1;
   }
+  } // end shadow clone per-player
 
   // Lasers with additive glow
   bx.globalCompositeOperation = 'lighter';
@@ -4417,17 +4492,19 @@ function render() {
   // Codex overlay (TAB)
   if (game.codexOpen) drawCodex();
 
-  // Damage flash — directional red indicator
-  if (game.damageFlash > 0) {
-    const alpha = game.damageFlash / 15;
+  // Damage flash — directional red indicator (use strongest flash from any player)
+  const maxFlash = Math.max(...players.map(p => p.damageFlash));
+  const flashPlayer = players.reduce((best, p) => p.damageFlash > best.damageFlash ? p : best, players[0]);
+  if (maxFlash > 0) {
+    const alpha = maxFlash / 15;
     // Light overall tint
     bx.fillStyle = '#330000';
     bx.globalAlpha = alpha * 0.5;
     bx.fillRect(0, 0, VIEW_W, VIEW_H);
     // Directional indicator — thick red bar on the side the hit came from
-    const hd = Math.sqrt(game.hitDirX * game.hitDirX + game.hitDirY * game.hitDirY);
+    const hd = Math.sqrt(flashPlayer.hitDirX * flashPlayer.hitDirX + flashPlayer.hitDirY * flashPlayer.hitDirY);
     if (hd > 0) {
-      const nx = game.hitDirX / hd, ny = game.hitDirY / hd;
+      const nx = flashPlayer.hitDirX / hd, ny = flashPlayer.hitDirY / hd;
       bx.fillStyle = '#ff0000';
       bx.globalAlpha = alpha * 0.6;
       const barThick = 6;
@@ -4488,8 +4565,9 @@ function render() {
   }
   bx.globalAlpha = 1;
 
-  // Low HP warning — pulsing dark red vignette
-  if (player.hp < player.maxHp * 0.3 && player.hp > 0) {
+  // Low HP warning — pulsing dark red vignette (any alive player)
+  const anyLowHp = players.some(p => !p.dead && p.hp < p.maxHp * 0.3 && p.hp > 0);
+  if (anyLowHp) {
     const pulse = Math.sin(game.time * 0.1) * 0.1 + 0.15;
     bx.fillStyle = '#330000';
     bx.globalAlpha = pulse;
@@ -4547,9 +4625,10 @@ function drawHUD() {
   const timeLeft = formatTime(GAME_DURATION - game.time);
   drawText(timeLeft, VIEW_W / 2 - textWidth(timeLeft, 1) / 2, 5, '#ffffff', 1);
 
-  // HP bar (left side)
+  // ── P1 HP bar (left side) ──
+  const p1 = players[0];
   const hpBarW = 80;
-  const hpRatio = Math.max(0, player.hp / player.maxHp);
+  const hpRatio = Math.max(0, p1.hp / p1.maxHp);
   bx.fillStyle = '#220000';
   bx.fillRect(4, 14, hpBarW, 8);
   const hpColor = hpRatio > 0.5 ? '#44cc44' : hpRatio > 0.25 ? '#ccaa22' : '#cc3333';
@@ -4557,31 +4636,61 @@ function drawHUD() {
   bx.fillRect(4, 14, Math.floor(hpBarW * hpRatio), 8);
   bx.fillStyle = '#ffffff';
   bx.fillRect(4, 14, Math.floor(hpBarW * hpRatio), 1);
-  drawText(Math.max(0, player.hp) + '/' + player.maxHp, 6, 15, '#ffffff');
+  drawText('J1 ' + Math.max(0, p1.hp) + '/' + p1.maxHp, 6, 15, '#ffffff');
+
+  // ── P2 HP bar (right side) ──
+  const p2 = players[1];
+  if (!p2.dead) {
+    const p2hpR = Math.max(0, p2.hp / p2.maxHp);
+    bx.fillStyle = '#220000';
+    bx.fillRect(VIEW_W - hpBarW - 56, 14, hpBarW, 8);
+    const p2hpCol = p2hpR > 0.5 ? '#44cc44' : p2hpR > 0.25 ? '#ccaa22' : '#cc3333';
+    bx.fillStyle = p2hpCol;
+    bx.fillRect(VIEW_W - hpBarW - 56, 14, Math.floor(hpBarW * p2hpR), 8);
+    bx.fillStyle = '#ffffff';
+    bx.fillRect(VIEW_W - hpBarW - 56, 14, Math.floor(hpBarW * p2hpR), 1);
+    drawText('J2 ' + Math.max(0, p2.hp) + '/' + p2.maxHp, VIEW_W - hpBarW - 54, 15, '#ffffff');
+  } else {
+    drawText('J2 MORT', VIEW_W - hpBarW - 54, 15, '#ff4444');
+  }
 
   // Kills
-  drawText('K:' + game.kills, 4, 26, '#aaaaaa');
+  drawText('V:' + game.kills, 4, 26, '#aaaaaa');
 
-  // XP bar (full width, bottom of screen)
-  const xpRatio = game.xp / game.xpToLevel;
+  // XP bars (P1 left half, P2 right half)
   const xpBarY = VIEW_H - 10;
+  const halfBarW = (barW - 4) / 2;
+  // P1 XP
+  const xpRatio1 = p1.xp / p1.xpToLevel;
   bx.fillStyle = '#113333';
-  bx.fillRect(4, xpBarY, barW, 7);
+  bx.fillRect(4, xpBarY, halfBarW, 7);
   bx.fillStyle = COL.xpOrb;
-  bx.fillRect(4, xpBarY, Math.floor(barW * xpRatio), 7);
+  bx.fillRect(4, xpBarY, Math.floor(halfBarW * xpRatio1), 7);
   bx.fillStyle = COL.xpOrbGlow;
-  bx.fillRect(4, xpBarY, Math.floor(barW * xpRatio), 1);
-  // Level text centered on XP bar
-  const lvText = 'LV ' + game.level;
-  drawText(lvText, VIEW_W / 2 - textWidth(lvText, 1) / 2, xpBarY + 1, '#ffffff', 1);
+  bx.fillRect(4, xpBarY, Math.floor(halfBarW * xpRatio1), 1);
+  const lvText1 = 'J1 NV' + p1.level;
+  drawText(lvText1, 4 + halfBarW / 2 - textWidth(lvText1, 1) / 2, xpBarY + 1, '#ffffff', 1);
+  // P2 XP
+  if (!p2.dead) {
+    const xpRatio2 = p2.xp / p2.xpToLevel;
+    bx.fillStyle = '#113333';
+    bx.fillRect(4 + halfBarW + 4, xpBarY, halfBarW, 7);
+    bx.fillStyle = '#44ddff';
+    bx.fillRect(4 + halfBarW + 4, xpBarY, Math.floor(halfBarW * xpRatio2), 7);
+    bx.fillStyle = '#88eeff';
+    bx.fillRect(4 + halfBarW + 4, xpBarY, Math.floor(halfBarW * xpRatio2), 1);
+    const lvText2 = 'J2 NV' + p2.level;
+    drawText(lvText2, 4 + halfBarW + 4 + halfBarW / 2 - textWidth(lvText2, 1) / 2, xpBarY + 1, '#ffffff', 1);
+  }
 
-  // Weapon name + affix icons
+  // Weapon name + affix icons (P1)
+  setPlayerContext(p1);
   const wName = getWeaponName();
   const wColor = getWeaponColor();
   drawText(wName, 4, 38, wColor);
 
   let affixX = 4 + textWidth(wName) + 4;
-  for (const affixId of game.activeAffixes) {
+  for (const affixId of p1.activeAffixes) {
     const affix = AFFIXES.find(a => a.id === affixId);
     if (affix) {
       drawIcon(affix.icon, affixX, 39, affix.color);
@@ -4589,11 +4698,10 @@ function drawHUD() {
     }
   }
 
-  // Upgrade slots (bottom of screen, above XP bar)
+  // Upgrade slots (P1 — bottom left, above XP bar)
   const barY = VIEW_H - 24;
-  const upgrades = Array.from(game.upgradeLevels.entries());
+  const upgrades = Array.from(p1.upgradeLevels.entries());
   let ux = 4;
-  // Draw empty slots first
   for (let s = 0; s < MAX_UPGRADES; s++) {
     bx.fillStyle = '#111122';
     bx.fillRect(ux + s * 18, barY, 14, 12);
@@ -4603,7 +4711,6 @@ function drawHUD() {
     bx.fillRect(ux + s * 18, barY, 1, 12);
     bx.fillRect(ux + s * 18 + 13, barY, 1, 12);
   }
-  // Fill with owned upgrades
   for (let i = 0; i < upgrades.length; i++) {
     const [id, lv] = upgrades[i];
     const upg = UPGRADES.find(u => u.id === id);
@@ -4614,12 +4721,12 @@ function drawHUD() {
     }
   }
 
-  // Skill cooldown (bottom right)
-  if (game.activeSkill) {
+  // Skill cooldown (P1 — bottom right)
+  if (p1.activeSkill) {
     const skX = VIEW_W - 50;
     const skY = VIEW_H - 30;
-    const sk = game.activeSkill;
-    const cdRatio = game.skillCooldown / sk.cooldown;
+    const sk = p1.activeSkill;
+    const cdRatio = p1.skillCooldown / sk.cooldown;
     // Background
     bx.fillStyle = '#111122';
     bx.fillRect(skX, skY, 46, 22);
@@ -4645,17 +4752,17 @@ function drawHUD() {
     drawText(sk.name, skX + 10, skY + 3, cdRatio > 0 ? '#666677' : sk.color, 1);
     // Cooldown text
     if (cdRatio > 0) {
-      const cdSec = Math.ceil(game.skillCooldown / FPS);
+      const cdSec = Math.ceil(p1.skillCooldown / FPS);
       drawText(cdSec + 'S', skX + 10, skY + 12, '#888899', 1);
     } else {
-      drawText('READY', skX + 10, skY + 12, '#44ff88', 1);
+      drawText('PRET', skX + 10, skY + 12, '#44ff88', 1);
     }
   }
 
-  // Super rare icons (right side under minimap)
-  if (game.activeSuperRares.length > 0) {
+  // Super rare icons (P1 right side under minimap)
+  if (p1.activeSuperRares.length > 0) {
     let srY = 56;
-    for (const srId of game.activeSuperRares) {
+    for (const srId of p1.activeSuperRares) {
       const sr = SUPER_RARES.find(s => s.id === srId);
       if (sr) {
         drawIcon(sr.icon, VIEW_W - 12, srY, sr.color);
@@ -4683,10 +4790,14 @@ function drawHUD() {
       else if (t === 2) { bx.fillStyle = COL.rock1; bx.fillRect(mmX + x, mmY + y, 1, 1); }
     }
   }
-  bx.fillStyle = COL.playerVisor;
-  const pmx = mmX + (player.x / (MAP_W * TILE)) * mmS;
-  const pmy = mmY + (player.y / (MAP_H * TILE)) * mmS;
-  bx.fillRect(pmx - 1, pmy - 1, 2, 2);
+  // Both players on minimap
+  for (const pp of players) {
+    if (pp.dead) continue;
+    bx.fillStyle = pp.visorColor;
+    const pmx = mmX + (pp.x / (MAP_W * TILE)) * mmS;
+    const pmy = mmY + (pp.y / (MAP_H * TILE)) * mmS;
+    bx.fillRect(pmx - 1, pmy - 1, 2, 2);
+  }
   bx.fillStyle = COL.enemyEye;
   for (const e of enemies) {
     const emx = mmX + (e.x / (MAP_W * TILE)) * mmS;
@@ -4739,26 +4850,31 @@ function drawSelectionScreen() {
   const isChest = game.state === 'chest_common' || isRare;
 
   const { cardW, cardH, gap, startX, startY } = getCardLayout();
+  const selectPs = players[game.selectingPlayer];
+
+  // Player indicator
+  const playerLabel = 'JOUEUR ' + (game.selectingPlayer + 1);
+  drawText(playerLabel, (VIEW_W - textWidth(playerLabel, 2)) / 2, startY - 56, selectPs.visorColor, 2);
 
   // Title — positioned just above the cards
-  const title = isSkillSelect ? 'CHOOSE SKILL' : isRare ? 'RARE LOOT' : isChest ? 'BONUS LOOT' : 'LEVEL UP';
+  const title = isSkillSelect ? 'CHOISIR COMP\xC9TENCE' : isRare ? 'BUTIN RARE' : isChest ? 'BUTIN BONUS' : 'MONT\xC9E DE NIVEAU';
   const titleColor = isSkillSelect ? '#ff44ff' : isRare ? '#ff8844' : isChest ? '#ffcc44' : '#44eeff';
   drawText(title, (VIEW_W - textWidth(title, 3)) / 2, startY - 40, titleColor, 3);
 
   // Rarity subtitle
-  let subtitle = isSkillSelect ? '[ RIGHT CLICK ABILITY ]' : isRare ? '[ LEGENDARY ]' : isChest ? '[ COMMON ]' : '[ CHOOSE AN UPGRADE ]';
+  let subtitle = isSkillSelect ? '[ CLIC DROIT ]' : isRare ? '[ L\xC9GENDAIRE ]' : isChest ? '[ COMMUN ]' : '[ CHOISISSEZ UNE AM\xC9LIORATION ]';
   const rarityColor = isSkillSelect ? '#cc44cc' : isRare ? '#ff6622' : isChest ? '#ccaa33' : '#6688aa';
   drawText(subtitle, (VIEW_W - textWidth(subtitle, 1)) / 2, startY - 18, rarityColor, 1);
 
   // Pending level ups count
-  if (game.pendingLevelUps > 0 && !isChest && !isSkillSelect) {
-    const pendingText = '+' + game.pendingLevelUps + ' MORE';
+  if (selectPs.pendingLevelUps > 0 && !isChest && !isSkillSelect) {
+    const pendingText = '+' + selectPs.pendingLevelUps + ' EN PLUS';
     drawText(pendingText, (VIEW_W - textWidth(pendingText, 1)) / 2, startY - 10, '#44eeff', 1);
   }
   // Slots indicator
   if (game.state === 'levelup') {
-    const ownedCount = game.upgradeLevels.size;
-    const slotsText = 'SLOTS: ' + ownedCount + '/' + MAX_UPGRADES;
+    const ownedCount = selectPs.upgradeLevels.size;
+    const slotsText = 'EMPLACEMENTS: ' + ownedCount + '/' + MAX_UPGRADES;
     const slotsColor = ownedCount >= MAX_UPGRADES ? '#ff8844' : '#6688aa';
     drawText(slotsText, (VIEW_W - textWidth(slotsText, 1)) / 2, startY - 10, slotsColor, 1);
   }
@@ -4766,8 +4882,8 @@ function drawSelectionScreen() {
   // Sort: owned upgrades first for visual priority
   const sorted = game.selectionOptions.map((opt, idx) => ({ opt, origIdx: idx }));
   sorted.sort((a, b) => {
-    const aOwned = 'apply' in a.opt && game.upgradeLevels.has((a.opt as Upgrade).id) ? 1 : 0;
-    const bOwned = 'apply' in b.opt && game.upgradeLevels.has((b.opt as Upgrade).id) ? 1 : 0;
+    const aOwned = 'apply' in a.opt && players[game.selectingPlayer].upgradeLevels.has((a.opt as Upgrade).id) ? 1 : 0;
+    const bOwned = 'apply' in b.opt && players[game.selectingPlayer].upgradeLevels.has((b.opt as Upgrade).id) ? 1 : 0;
     return bOwned - aOwned;
   });
 
@@ -4782,7 +4898,7 @@ function drawSelectionScreen() {
     const optIsSuperRare = isSuperRare(opt);
     const optIsAffix = isAffix(opt);
     const optIsUpgrade = !optIsSkill && !optIsSuperRare && !optIsAffix;
-    const isOwned = optIsUpgrade && game.upgradeLevels.has((opt as Upgrade).id);
+    const isOwned = optIsUpgrade && players[game.selectingPlayer].upgradeLevels.has((opt as Upgrade).id);
     const isHighRarity = optIsSkill || optIsSuperRare || optIsAffix;
 
     // Rarity color — owned items get cyan highlight
@@ -4837,7 +4953,7 @@ function drawSelectionScreen() {
 
     // Level progress bar for owned upgrades
     if (isOwned) {
-      const lv = game.upgradeLevels.get((opt as Upgrade).id) || 0;
+      const lv = players[game.selectingPlayer].upgradeLevels.get((opt as Upgrade).id) || 0;
       const pbW = cardW - 8;
       bx.fillStyle = '#111133';
       bx.fillRect(cx + 4, cardY + 3, pbW, 3);
@@ -4848,7 +4964,7 @@ function drawSelectionScreen() {
     }
 
     // Tag
-    const tagText = optIsSkill ? 'SKILL' : optIsSuperRare ? 'SUPER RARE' : optIsAffix ? 'LEGENDARY' : isOwned ? 'OWNED' : 'NEW';
+    const tagText = optIsSkill ? 'COMP\xC9TENCE' : optIsSuperRare ? 'SUPER RARE' : optIsAffix ? 'L\xC9GENDAIRE' : isOwned ? 'POSS\xC9D\xC9' : 'NOUVEAU';
     const tagCol = isOwned ? '#44eeff' : optIsSkill ? '#44ffcc' : optIsSuperRare ? '#ff44ff' : optIsAffix ? '#ff8844' : '#88aa44';
     drawText(tagText, cx + (cardW - textWidth(tagText, 1)) / 2, cardY + (isOwned ? 8 : 4), tagCol, 1);
 
@@ -4876,7 +4992,7 @@ function drawSelectionScreen() {
 
     if (optIsUpgrade) {
       const upg = opt as Upgrade;
-      const currentLv = game.upgradeLevels.get(upg.id) || 0;
+      const currentLv = players[game.selectingPlayer].upgradeLevels.get(upg.id) || 0;
       const newLv = currentLv + 1;
 
       // Stat gain
@@ -4897,7 +5013,7 @@ function drawSelectionScreen() {
         const combo = combos[0];
         const partnerId = combo.upgrade1 === upg.id ? combo.upgrade2 : combo.upgrade1;
         const partner = UPGRADES.find(u => u.id === partnerId);
-        const partnerLv = game.upgradeLevels.get(partnerId) || 0;
+        const partnerLv = players[game.selectingPlayer].upgradeLevels.get(partnerId) || 0;
         const done = newLv >= MAX_UPGRADE_LEVEL && partnerLv >= MAX_UPGRADE_LEVEL;
         // Format: "+ PARTNER = COMBO"
         if (partner) {
@@ -4909,12 +5025,12 @@ function drawSelectionScreen() {
       }
     } else if (optIsSkill) {
       const cd = Math.round((opt as Skill).cooldown / FPS);
-      drawText('RIGHT CLICK', cx + (cardW - textWidth('RIGHT CLICK', 1)) / 2, cardY + 68, '#44ffcc', 1);
-      drawText(cd + 'S COOLDOWN', cx + (cardW - textWidth(cd + 'S COOLDOWN', 1)) / 2, cardY + 80, '#88aaaa', 1);
+      drawText('CLIC DROIT', cx + (cardW - textWidth('CLIC DROIT', 1)) / 2, cardY + 68, '#44ffcc', 1);
+      drawText(cd + 'S RECHARGE', cx + (cardW - textWidth(cd + 'S RECHARGE', 1)) / 2, cardY + 80, '#88aaaa', 1);
     } else {
       const label = optIsSuperRare ? 'SUPER RARE' : 'UNIQUE';
-      const labelCol = optIsSuperRare ? '#ff44ff' : '#ff8844';
-      drawText(label, cx + (cardW - textWidth(label, 1)) / 2, cardY + 68, labelCol, 1);
+      const labelColV = optIsSuperRare ? '#ff44ff' : '#ff8844';
+      drawText(label, cx + (cardW - textWidth(label, 1)) / 2, cardY + 68, labelColV, 1);
     }
 
     // Key hint (bottom-left, small)
@@ -4936,21 +5052,21 @@ function updateCodex() {
       const cy = startY + row * lineH;
       if (mouse.x >= cx && mouse.x < cx + colW - 16 && mouse.y >= cy && mouse.y < cy + lineH) {
         const combo = COMBOS[ci];
-        const lv1 = game.upgradeLevels.get(combo.upgrade1) || 0;
-        const lv2 = game.upgradeLevels.get(combo.upgrade2) || 0;
+        const lv1 = players[game.selectingPlayer].upgradeLevels.get(combo.upgrade1) || 0;
+        const lv2 = players[game.selectingPlayer].upgradeLevels.get(combo.upgrade2) || 0;
         const isActive = lv1 >= MAX_UPGRADE_LEVEL && lv2 >= MAX_UPGRADE_LEVEL;
 
         if (isActive) {
           // REMOVE combo — reset both upgrades to 0
-          game.upgradeLevels.delete(combo.upgrade1);
-          game.upgradeLevels.delete(combo.upgrade2);
+          players[game.selectingPlayer].upgradeLevels.delete(combo.upgrade1);
+          players[game.selectingPlayer].upgradeLevels.delete(combo.upgrade2);
           // Reset weapon stats affected
           weapon.fireRate = 35; weapon.speed = 4; weapon.damage = 1;
           weapon.size = 3; weapon.pierce = 0; weapon.count = 1; weapon.spread = 0;
           player.speed = 1.5; player.maxHp = 100;
-          game.pickupRadius = 16; game.magnetRadius = 24;
+          player.pickupRadius = 16; player.magnetRadius = 24;
           // Re-apply all remaining upgrades
-          for (const [id, lv] of game.upgradeLevels) {
+          for (const [id, lv] of players[game.selectingPlayer].upgradeLevels) {
             const u = UPGRADES.find(uu => uu.id === id);
             if (u) u.apply(lv);
           }
@@ -4958,8 +5074,8 @@ function updateCodex() {
           // ACTIVATE combo — max both upgrades
           const upg1 = UPGRADES.find(u => u.id === combo.upgrade1)!;
           const upg2 = UPGRADES.find(u => u.id === combo.upgrade2)!;
-          game.upgradeLevels.set(combo.upgrade1, MAX_UPGRADE_LEVEL);
-          game.upgradeLevels.set(combo.upgrade2, MAX_UPGRADE_LEVEL);
+          players[game.selectingPlayer].upgradeLevels.set(combo.upgrade1, MAX_UPGRADE_LEVEL);
+          players[game.selectingPlayer].upgradeLevels.set(combo.upgrade2, MAX_UPGRADE_LEVEL);
           upg1.apply(MAX_UPGRADE_LEVEL);
           upg2.apply(MAX_UPGRADE_LEVEL);
         }
@@ -4978,7 +5094,7 @@ function drawCodex() {
   bx.fillRect(0, 0, VIEW_W, VIEW_H);
 
   drawText('CODEX', (VIEW_W - textWidth('CODEX', 3)) / 2, 8, '#ffcc44', 3);
-  drawText('CLICK COMBO TO ACTIVATE', (VIEW_W - textWidth('CLICK COMBO TO ACTIVATE', 1)) / 2, 30, '#555566', 1);
+  drawText('CLIQUEZ SUR UN COMBO POUR ACTIVER', (VIEW_W - textWidth('CLIQUEZ SUR UN COMBO POUR ACTIVER', 1)) / 2, 30, '#555566', 1);
 
   const colW = Math.floor(VIEW_W / 2);
   const startY = 44;
@@ -4991,8 +5107,8 @@ function drawCodex() {
     const cx = col * colW + 8;
     const cy = startY + row * lineH;
 
-    const lv1 = game.upgradeLevels.get(combo.upgrade1) || 0;
-    const lv2 = game.upgradeLevels.get(combo.upgrade2) || 0;
+    const lv1 = players[game.selectingPlayer].upgradeLevels.get(combo.upgrade1) || 0;
+    const lv2 = players[game.selectingPlayer].upgradeLevels.get(combo.upgrade2) || 0;
     const isActive = lv1 >= MAX_UPGRADE_LEVEL && lv2 >= MAX_UPGRADE_LEVEL;
     const inProgress = lv1 > 0 || lv2 > 0;
 
@@ -5049,20 +5165,22 @@ function drawGameOver() {
   bx.fillRect(0, 0, VIEW_W, VIEW_H);
 
   const cx = VIEW_W / 2;
-  const title = game.won ? 'YOU SURVIVED' : 'GAME OVER';
+  const title = game.won ? 'VOUS AVEZ SURVÉCU' : 'PARTIE TERMINÉE';
   const titleColor = game.won ? '#44ff44' : '#ff4444';
   drawText(title, cx - textWidth(title, 3) / 2, VIEW_H / 2 - 50, titleColor, 3);
   drawText(formatTime(game.time), cx - textWidth(formatTime(game.time), 2) / 2, VIEW_H / 2 - 20, '#ffcc44', 2);
 
-  const killsText = 'KILLS: ' + game.kills;
-  const levelText = 'LEVEL: ' + game.level;
+  const killsText = 'VICTIMES: ' + game.kills;
   drawText(killsText, cx - textWidth(killsText) / 2, VIEW_H / 2 + 5, '#aaaaaa');
-  drawText(levelText, cx - textWidth(levelText) / 2, VIEW_H / 2 + 18, COL.xpOrb);
+  const lvP1 = 'J1 NV' + players[0].level;
+  const lvP2 = 'J2 NV' + players[1].level;
+  drawText(lvP1, cx - textWidth(lvP1) / 2 - 40, VIEW_H / 2 + 18, COL.xpOrb);
+  drawText(lvP2, cx - textWidth(lvP2) / 2 + 40, VIEW_H / 2 + 18, '#44ddff');
 
   if (game.deathScreenTimer > 60) {
     const blink = Math.floor(game.deathScreenTimer / 20) % 2 === 0;
     if (blink) {
-      const retryText = 'CLICK TO RETRY';
+      const retryText = 'CLIQUEZ POUR RECOMMENCER';
       drawText(retryText, cx - textWidth(retryText) / 2, VIEW_H / 2 + 40, '#888888');
     }
   }
