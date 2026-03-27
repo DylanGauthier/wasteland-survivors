@@ -21,6 +21,7 @@ const ctx = canvas.getContext('2d')!;
 canvas.width = VIEW_W * SCALE;
 canvas.height = VIEW_H * SCALE;
 ctx.imageSmoothingEnabled = false;
+// Cursor hidden during gameplay, shown on title/selection
 canvas.style.cursor = 'none';
 
 const buf = document.createElement('canvas');
@@ -172,7 +173,7 @@ function lerp(a: number, b: number, t: number): number { return a + (b - a) * t;
 // ── Types ──
 interface Vec { x: number; y: number; }
 type Dir = 'up' | 'down' | 'left' | 'right';
-type GameState = 'playing' | 'levelup' | 'chest_common' | 'chest_rare' | 'skill_select' | 'gameover';
+type GameState = 'title' | 'playing' | 'paused' | 'levelup' | 'chest_common' | 'chest_rare' | 'gameover';
 
 // ── Upgrade system ──
 const MAX_UPGRADE_LEVEL = 6;
@@ -187,72 +188,72 @@ interface Upgrade {
 
 const UPGRADES: Upgrade[] = [
   {
-    id: 'fire_rate', name: 'FIRE RATE', desc: 'SHOOT FASTER',
+    id: 'fire_rate', name: 'FIRE RATE', desc: 'TIR RAPIDE',
     icon: [[0,1,0,0,0],[1,1,1,0,0],[0,1,0,0,0],[0,0,1,1,0],[0,0,0,1,1]],
     apply: (lv) => { weapon.fireRate = Math.max(6, 35 - lv * 4); },
   },
   {
-    id: 'damage', name: 'DAMAGE', desc: 'HIT HARDER',
+    id: 'damage', name: 'DAMAGE', desc: 'PLUS DE D\xC9GATS',
     icon: [[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]],
     apply: (lv) => { weapon.damage = 1 + lv; },
   },
   {
-    id: 'move_speed', name: 'SPEED', desc: 'MOVE FASTER',
+    id: 'move_speed', name: 'SPEED', desc: 'PLUS RAPIDE',
     icon: [[0,0,0,1,0],[0,0,1,1,0],[1,1,1,1,1],[0,0,1,1,0],[0,0,0,1,0]],
     apply: (lv) => { player.speed = 1.5 + lv * 0.15; },
   },
   {
-    id: 'max_hp', name: 'VITALITY', desc: 'MORE HEALTH',
+    id: 'max_hp', name: 'VITALITY', desc: 'PLUS DE VIE',
     icon: [[0,1,0,1,0],[1,1,1,1,1],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]],
     apply: (lv) => { player.maxHp = 100 + lv * 10; player.hp = Math.min(player.hp + 10, player.maxHp); },
   },
   {
-    id: 'pickup_radius', name: 'MAGNET', desc: 'WIDER PICKUP',
+    id: 'pickup_radius', name: 'MAGNET', desc: 'PLUS D\'AIMANT',
     icon: [[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1]],
     apply: (lv) => { player.pickupRadius = 16 + lv * 10; player.magnetRadius = 30 + lv * 30; },
   },
   {
-    id: 'projectile', name: 'MULTISHOT', desc: 'MORE BULLETS',
+    id: 'projectile', name: 'MULTISHOT', desc: 'PLUS DE BALLES',
     icon: [[1,0,1,0,1],[0,0,0,0,0],[1,0,1,0,1],[0,0,0,0,0],[1,0,1,0,1]],
     apply: (lv) => { weapon.count = 1 + lv; weapon.spread = Math.min(0.3, 0.06 * lv); },
   },
   {
-    id: 'pierce', name: 'PIERCE', desc: 'PASS THROUGH',
+    id: 'pierce', name: 'PIERCE', desc: 'TRANSPERCE',
     icon: [[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0],[0,0,1,0,0]],
     apply: (lv) => { weapon.pierce = lv; },
   },
   {
-    id: 'proj_size', name: 'CALIBER', desc: 'BIGGER SHOTS',
+    id: 'proj_size', name: 'CALIBER', desc: 'PLUS GROS TIRS',
     icon: [[0,0,0,0,0],[0,1,1,1,0],[0,1,1,1,0],[0,1,1,1,0],[0,0,0,0,0]],
     apply: (lv) => { weapon.size = 3 + lv; },
   },
   {
-    id: 'proj_speed', name: 'VELOCITY', desc: 'FASTER BULLETS',
+    id: 'proj_speed', name: 'VELOCITY', desc: 'BALLES RAPIDES',
     icon: [[0,0,0,0,1],[0,0,0,1,1],[1,1,1,1,1],[0,0,0,1,1],[0,0,0,0,1]],
     apply: (lv) => { weapon.speed = 4 + lv * 0.5; },
   },
   {
-    id: 'life_steal', name: 'LEECH', desc: 'HEAL ON KILL',
+    id: 'life_steal', name: 'LEECH', desc: 'VOL DE VIE',
     icon: [[0,1,0,1,0],[1,0,1,0,1],[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0]],
     apply: () => { /* checked in onEnemyKill */ },
   },
   {
-    id: 'thorns', name: 'THORNS', desc: 'HURT ON TOUCH',
+    id: 'thorns', name: 'THORNS', desc: 'D\xC9GATS CONTACT',
     icon: [[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1]],
     apply: () => { /* checked in contact damage */ },
   },
   {
-    id: 'orbital', name: 'ORBITAL', desc: 'ROTATING SHOTS',
+    id: 'orbital', name: 'ORBITAL', desc: 'TIRS ROTATIFS',
     icon: [[0,1,1,1,0],[1,0,0,0,1],[1,0,0,0,1],[1,0,0,0,1],[0,1,1,1,0]],
     apply: () => { /* handled in update */ },
   },
   {
-    id: 'armor', name: 'ARMOR', desc: 'REDUCE DAMAGE',
+    id: 'armor', name: 'ARMOR', desc: 'R\xC9DUCTION D\xC9GATS',
     icon: [[0,1,1,1,0],[1,1,1,1,1],[1,1,0,1,1],[1,1,1,1,1],[0,1,1,1,0]],
     apply: () => { /* checked on damage */ },
   },
   {
-    id: 'dodge', name: 'DODGE', desc: 'CHANCE TO EVADE',
+    id: 'dodge', name: 'DODGE', desc: 'CHANCE D\'ESQUIVE',
     icon: [[0,0,0,1,0],[0,0,1,0,0],[0,1,0,0,0],[0,0,1,0,0],[0,0,0,1,0]],
     apply: () => { /* checked on damage */ },
   },
@@ -271,39 +272,39 @@ interface Combo {
 
 const COMBOS: Combo[] = [
   // Offensive
-  { id: 'carpet_bomb', name: 'CARPET BOMB', desc: 'BOMBING RUN ACROSS SCREEN', upgrade1: 'projectile', upgrade2: 'proj_size',
+  { id: 'carpet_bomb', name: 'CARPET BOMB', desc: 'BOMBARDEMENT SUR L\'\xC9CRAN', upgrade1: 'projectile', upgrade2: 'proj_size',
     color: '#ff6622', icon: [[1,0,1,0,1],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[1,0,1,0,1]] },
-  { id: 'death_ray', name: 'DEATH RAY', desc: 'CONTINUOUS LASER BEAM', upgrade1: 'damage', upgrade2: 'pierce',
+  { id: 'death_ray', name: 'DEATH RAY', desc: 'RAYON LASER CONTINU', upgrade1: 'damage', upgrade2: 'pierce',
     color: '#ff2244', icon: [[0,0,1,0,0],[0,0,1,0,0],[1,1,1,1,1],[0,0,1,0,0],[0,0,1,0,0]] },
-  { id: 'sniper', name: 'SNIPER', desc: 'MASSIVE HITSCAN SHOT', upgrade1: 'proj_speed', upgrade2: 'damage',
+  { id: 'sniper', name: 'SNIPER', desc: 'TIR INSTANTAN\xC9 MASSIF', upgrade1: 'proj_speed', upgrade2: 'damage',
     color: '#4488ff', icon: [[0,0,0,0,1],[0,0,0,0,1],[1,1,1,1,1],[0,0,0,0,1],[0,0,0,0,1]] },
-  { id: 'bullet_hell', name: 'BULLET HELL', desc: 'ALL SHOTS HOME ON ENEMIES', upgrade1: 'projectile', upgrade2: 'fire_rate',
+  { id: 'bullet_hell', name: 'BULLET HELL', desc: 'TIRS \xC0 T\xCATE CHERCHEUSE', upgrade1: 'projectile', upgrade2: 'fire_rate',
     color: '#ffff44', icon: [[1,0,0,0,1],[0,1,0,0,0],[0,0,1,0,0],[0,0,0,1,0],[1,0,0,0,1]] },
-  { id: 'shockwave', name: 'SHOCKWAVE', desc: 'EXPANDING WAVE PUSHES ALL', upgrade1: 'proj_size', upgrade2: 'pierce',
+  { id: 'shockwave', name: 'SHOCKWAVE', desc: 'ONDE DE CHOC REPOUSSE TOUT', upgrade1: 'proj_size', upgrade2: 'pierce',
     color: '#44ffaa', icon: [[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0]] },
-  { id: 'meteor', name: 'METEOR', desc: 'ROCKS FALL FROM THE SKY', upgrade1: 'damage', upgrade2: 'proj_size',
+  { id: 'meteor', name: 'METEOR', desc: 'ROCHERS TOMBENT DU CIEL', upgrade1: 'damage', upgrade2: 'proj_size',
     color: '#ff8800', icon: [[0,0,1,0,0],[0,1,1,1,0],[0,1,1,1,0],[1,1,1,1,1],[0,0,0,0,0]] },
-  { id: 'nova_pulse', name: 'NOVA PULSE', desc: 'GRAVITY ORB SUCKS + EXPLODES', upgrade1: 'orbital', upgrade2: 'damage',
+  { id: 'nova_pulse', name: 'NOVA PULSE', desc: 'ORBE GRAVITATIONNEL EXPLOSE', upgrade1: 'orbital', upgrade2: 'damage',
     color: '#ff44aa', icon: [[1,0,1,0,1],[0,0,0,0,0],[1,0,1,0,1],[0,0,0,0,0],[1,0,1,0,1]] },
-  { id: 'blade_storm', name: 'BLADE STORM', desc: 'SPINNING BLADES FLY OUT', upgrade1: 'thorns', upgrade2: 'orbital',
+  { id: 'blade_storm', name: 'BLADE STORM', desc: 'LAMES TOURBILLONNANTES', upgrade1: 'thorns', upgrade2: 'orbital',
     color: '#ff8888', icon: [[0,1,0,1,0],[1,0,0,0,1],[0,0,1,0,0],[1,0,0,0,1],[0,1,0,1,0]] },
-  { id: 'railgun', name: 'RAILGUN', desc: 'INSTANT LINE THROUGH ALL', upgrade1: 'proj_speed', upgrade2: 'pierce',
+  { id: 'railgun', name: 'RAILGUN', desc: 'RAYON INSTANTAN\xC9 TOTAL', upgrade1: 'proj_speed', upgrade2: 'pierce',
     color: '#88ffff', icon: [[1,0,0,0,0],[1,1,0,0,0],[1,1,1,1,1],[1,1,0,0,0],[1,0,0,0,0]] },
   // Utility
-  { id: 'bullet_time', name: 'BULLET TIME', desc: 'PERIODIC SLOW-MO PULSE', upgrade1: 'move_speed', upgrade2: 'fire_rate',
+  { id: 'bullet_time', name: 'BULLET TIME', desc: 'RALENTI P\xC9RIODIQUE', upgrade1: 'move_speed', upgrade2: 'fire_rate',
     color: '#aaccff', icon: [[0,1,1,1,0],[1,0,0,1,0],[1,0,1,0,0],[1,0,0,0,0],[0,1,1,1,0]] },
-  { id: 'second_life', name: 'SECOND LIFE', desc: 'OVERHEAL GOLDEN SHIELD', upgrade1: 'life_steal', upgrade2: 'max_hp',
+  { id: 'second_life', name: 'SECOND LIFE', desc: 'BOUCLIER DOR\xC9 DE SURVIE', upgrade1: 'life_steal', upgrade2: 'max_hp',
     color: '#44ff88', icon: [[0,1,0,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0],[0,1,0,1,0]] },
-  { id: 'warp_field', name: 'WARP FIELD', desc: 'MAGNET AURA + ENEMY PUSH', upgrade1: 'pickup_radius', upgrade2: 'move_speed',
+  { id: 'warp_field', name: 'WARP FIELD', desc: 'AURA MAGN\xC9TIQUE + REPOUSSE', upgrade1: 'pickup_radius', upgrade2: 'move_speed',
     color: '#cc88ff', icon: [[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1]] },
   // Defensive combos
-  { id: 'iron_skin', name: 'IRON SKIN', desc: 'REGEN + 50% DAMAGE REDUCE', upgrade1: 'armor', upgrade2: 'max_hp',
+  { id: 'iron_skin', name: 'IRON SKIN', desc: 'R\xC9GEN + 50% R\xC9DUCTION', upgrade1: 'armor', upgrade2: 'max_hp',
     color: '#aaaacc', icon: [[0,1,1,1,0],[1,1,1,1,1],[1,1,1,1,1],[1,1,1,1,1],[0,1,1,1,0]] },
-  { id: 'reflect', name: 'REFLECT', desc: 'DEFLECT ENEMY PROJECTILES', upgrade1: 'armor', upgrade2: 'thorns',
+  { id: 'reflect', name: 'REFLECT', desc: 'D\xC9VIE LES PROJECTILES', upgrade1: 'armor', upgrade2: 'thorns',
     color: '#4488ff', icon: [[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0]] },
-  { id: 'phantom', name: 'PHANTOM', desc: 'DODGE = INVISIBLE 2S', upgrade1: 'dodge', upgrade2: 'move_speed',
+  { id: 'phantom', name: 'PHANTOM', desc: 'ESQUIVE = INVISIBLE 2S', upgrade1: 'dodge', upgrade2: 'move_speed',
     color: '#8844cc', icon: [[0,0,1,0,0],[0,1,1,1,0],[0,1,0,1,0],[0,0,1,0,0],[0,0,0,0,0]] },
-  { id: 'fortress', name: 'FORTRESS', desc: 'DODGE = 1S FULL SHIELD', upgrade1: 'dodge', upgrade2: 'armor',
+  { id: 'fortress', name: 'FORTRESS', desc: 'ESQUIVE = BOUCLIER 1S', upgrade1: 'dodge', upgrade2: 'armor',
     color: '#44aaff', icon: [[0,1,1,1,0],[1,0,0,0,1],[1,0,1,0,1],[1,0,0,0,1],[0,1,1,1,0]] },
 ];
 
@@ -332,27 +333,27 @@ interface Affix {
 
 const AFFIXES: Affix[] = [
   {
-    id: 'chain', name: 'CHAIN', desc: 'LIGHTNING ARC', color: '#4488ff',
+    id: 'chain', name: 'CHAIN', desc: 'ARC \xC9LECTRIQUE', color: '#4488ff',
     icon: [[1,0,0,0,0],[0,1,0,0,0],[0,0,1,0,0],[0,0,0,1,0],[0,0,0,0,1]],
   },
   {
-    id: 'explosion', name: 'EXPLOSION', desc: 'AOE BLAST', color: '#ff6622',
+    id: 'explosion', name: 'EXPLOSION', desc: 'EXPLOSION DE ZONE', color: '#ff6622',
     icon: [[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0]],
   },
   {
-    id: 'affix_lifesteal', name: 'VAMPIRIC', desc: 'HEAL EACH KILL', color: '#44ff44',
+    id: 'affix_lifesteal', name: 'VAMPIRIC', desc: 'SOIN PAR KILL', color: '#44ff44',
     icon: [[0,1,0,1,0],[1,1,1,1,1],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]],
   },
   {
-    id: 'freeze', name: 'FREEZE', desc: 'SLOW ENEMIES', color: '#88ddff',
+    id: 'freeze', name: 'FREEZE', desc: 'RALENTIT ENNEMIS', color: '#88ddff',
     icon: [[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]],
   },
   {
-    id: 'burn', name: 'BURN', desc: 'DAMAGE OVER TIME', color: '#ff4400',
+    id: 'burn', name: 'BURN', desc: 'D\xC9GATS CONTINUS', color: '#ff4400',
     icon: [[0,0,1,0,0],[0,1,1,0,0],[0,1,1,1,0],[1,1,1,1,0],[0,1,1,0,0]],
   },
   {
-    id: 'ricochet', name: 'RICOCHET', desc: 'BOUNCE ON KILL', color: '#ddaa44',
+    id: 'ricochet', name: 'RICOCHET', desc: 'REBOND AU KILL', color: '#ddaa44',
     icon: [[1,0,0,0,0],[0,1,0,0,0],[0,0,1,0,0],[0,0,0,1,0],[0,0,1,0,0]],
   },
 ];
@@ -368,35 +369,35 @@ interface SuperRare {
 
 const SUPER_RARES: SuperRare[] = [
   {
-    id: 'drone', name: 'DRONE', desc: 'ORBITING TURRET', color: '#44ccff',
+    id: 'drone', name: 'DRONE', desc: 'TOURELLE ORBITALE', color: '#44ccff',
     icon: [[0,1,1,1,0],[1,0,0,0,1],[1,0,1,0,1],[1,0,0,0,1],[0,1,1,1,0]],
   },
   {
-    id: 'shadow_clone', name: 'SHADOW', desc: 'ECHO CLONE', color: '#8844cc',
+    id: 'shadow_clone', name: 'SHADOW', desc: 'CLONE \xC9CHO', color: '#8844cc',
     icon: [[0,0,1,0,0],[0,1,1,1,0],[1,1,0,1,1],[0,1,1,1,0],[0,0,1,0,0]],
   },
   {
-    id: 'nova_on_kill', name: 'NOVA', desc: 'EXPLODE ON KILL', color: '#ff4488',
+    id: 'nova_on_kill', name: 'NOVA', desc: 'EXPLOSION AU KILL', color: '#ff4488',
     icon: [[1,0,1,0,1],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[1,0,1,0,1]],
   },
   {
-    id: 'thunder', name: 'THUNDER', desc: 'RANDOM STRIKES', color: '#ffff44',
+    id: 'thunder', name: 'THUNDER', desc: 'FOUDRE AL\xC9ATOIRE', color: '#ffff44',
     icon: [[0,0,1,1,0],[0,1,1,0,0],[1,1,1,1,0],[0,0,1,1,0],[0,1,1,0,0]],
   },
   {
-    id: 'poison_trail', name: 'TOXIN', desc: 'POISON TRAIL', color: '#44ff44',
+    id: 'poison_trail', name: 'TOXIN', desc: 'TRAIN\xC9E DE POISON', color: '#44ff44',
     icon: [[0,0,0,0,0],[0,1,0,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]],
   },
   {
-    id: 'second_wind', name: '2ND WIND', desc: 'REVIVE ONCE', color: '#ffffff',
+    id: 'second_wind', name: '2ND WIND', desc: 'R\xC9SURRECTION UNIQUE', color: '#ffffff',
     icon: [[0,1,0,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0],[0,1,0,1,0]],
   },
   {
-    id: 'shield_orb', name: 'SHIELD', desc: 'BLOCK 1 HIT/15S', color: '#44aaff',
+    id: 'shield_orb', name: 'SHIELD', desc: 'BLOQUE 1 COUP/15S', color: '#44aaff',
     icon: [[0,1,1,1,0],[1,1,1,1,1],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]],
   },
   {
-    id: 'magnet_pulse', name: 'MAGNET', desc: 'PULL ALL XP/10S', color: '#ff88ff',
+    id: 'magnet_pulse', name: 'MAGNET', desc: 'ASPIRE XP/10S', color: '#ff88ff',
     icon: [[1,0,0,0,1],[1,1,0,1,1],[1,0,1,0,1],[0,1,0,1,0],[0,0,1,0,0]],
   },
 ];
@@ -413,12 +414,12 @@ interface Skill {
 
 const SKILLS: Skill[] = [
   {
-    id: 'dash', name: 'DASH', desc: 'FAST DASH + DMG', color: '#44ffcc',
+    id: 'dash', name: 'DASH', desc: 'RUÉE RAPIDE + D\xC9GATS', color: '#44ffcc',
     icon: [[0,0,0,1,0],[0,0,1,1,0],[1,1,1,1,1],[0,0,1,1,0],[0,0,0,1,0]],
     cooldown: 90, // 1.5s
   },
   {
-    id: 'grenade', name: 'GRENADE', desc: 'BIG EXPLOSION', color: '#ff6622',
+    id: 'grenade', name: 'GRENADE', desc: 'GROSSE EXPLOSION', color: '#ff6622',
     icon: [[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]],
     cooldown: 240, // 4s
   },
@@ -428,7 +429,7 @@ const SKILLS: Skill[] = [
     cooldown: 360, // 6s
   },
   {
-    id: 'shockwave', name: 'SHOCKWAV', desc: 'MASSIVE PUSH', color: '#ffaa44',
+    id: 'shockwave', name: 'SHOCKWAV', desc: 'REPOUSS\xC9E MASSIVE', color: '#ffaa44',
     icon: [[0,0,1,0,0],[0,1,0,1,0],[1,0,0,0,1],[0,1,0,1,0],[0,0,1,0,0]],
     cooldown: 180, // 3s
   },
@@ -476,9 +477,17 @@ interface PlayerState {
   shieldOrbTimer: number; shieldOrbActive: boolean;
   magnetPulseTimer: number;
   novaOnKillChance: number;
-  // XP/Level
-  xp: number; xpToLevel: number; level: number;
+  // Per-player pending level ups (how many upgrades this player still needs to pick)
   pendingLevelUps: number;
+  kills: number;
+  totalDamage: number;
+  // Revive system (co-op)
+  reviveProgress: number; // 0 to 1, fills when ally is near
+  deathX: number; deathY: number; // position where player died
+  // Per-player selection state (for split-screen simultaneous picking)
+  selectionOptions: (Upgrade | Affix)[];
+  selectionHover: number;
+  selectionDone: boolean; // true = this player has picked, waiting for other
   // Pickup
   pickupRadius: number;
   magnetRadius: number;
@@ -517,14 +526,46 @@ function createPlayer(index: number): PlayerState {
     shieldOrbTimer: 0, shieldOrbActive: true,
     magnetPulseTimer: 0,
     novaOnKillChance: 0.15,
-    xp: 0, xpToLevel: 10, level: 1,
     pendingLevelUps: 0,
+    kills: 0, totalDamage: 0,
+    reviveProgress: 0, deathX: 0, deathY: 0,
+    selectionOptions: [],
+    selectionHover: -1,
+    selectionDone: false,
     pickupRadius: 16, magnetRadius: 20,
     playerIndex: index,
     visorColor: index === 0 ? '#aa66ff' : '#44ddff',
     dead: false,
   };
 }
+
+// ── Player names & colors ──
+const playerNames = ['JOUEUR 1', 'JOUEUR 2'];
+const PLAYER_COLORS = [
+  { name: 'VIOLET', color: '#aa66ff' },
+  { name: 'ROUGE', color: '#ff4466' },
+  { name: 'ROSE', color: '#ff88aa' },
+  { name: 'BLANC', color: '#ffffff' },
+  { name: 'CYAN', color: '#44ddff' },
+  { name: 'VERT', color: '#44ff88' },
+  { name: 'ORANGE', color: '#ffaa22' },
+  { name: 'ECARLATE', color: '#ff2222' },
+  { name: 'INDIGO', color: '#8844ff' },
+  { name: 'OR', color: '#ffff44' },
+];
+const playerColors = ['#aa66ff', '#44ddff'];
+
+// ── Title screen state ──
+const titleState = {
+  mode: 0 as 0 | 1 | 2, // 0 = selecting mode, 1 = name input, 2 = color select
+  playerCount: 1,
+  editingPlayer: 0,
+  nameInput: '',
+  selectedColors: [0, 4], // indices into PLAYER_COLORS
+  cursor: 0, // keyboard cursor position
+  pauseCursor: 0, // 0 = resume, 1 = quit (for pause menu)
+  ashParticles: [] as { x: number; y: number; dx: number; dy: number; life: number; maxLife: number }[],
+};
 
 // ── Players array (co-op) ──
 const players: PlayerState[] = [createPlayer(0), createPlayer(1)];
@@ -564,8 +605,12 @@ function getWeaponColor(): string {
 // ── Game state (shared between players) ──
 const game = {
   time: 0,
-  state: 'playing' as GameState,
+  state: 'title' as GameState,
   kills: 0,
+  // Shared XP/Level (both players benefit)
+  xp: 0,
+  xpToLevel: 10,
+  level: 1,
   gameOver: false,
   deathScreenTimer: 0,
   won: false,
@@ -580,7 +625,7 @@ const game = {
   megaBossSpawned: false,
   // Selection screen
   selectionOptions: [] as (Upgrade | Affix)[],
-  selectionType: '' as 'levelup' | 'chest_common' | 'chest_rare' | 'skill_select',
+  selectionType: '' as 'levelup' | 'chest_common' | 'chest_rare',
   selectionHover: -1,
   selectionDelay: 0,  // frames before clicks are accepted
   selectingPlayer: 0, // which player is currently selecting (0 or 1)
@@ -650,7 +695,7 @@ interface Drop {
 
 interface Chest {
   x: number; y: number;
-  rarity: 'common' | 'rare' | 'skill';
+  rarity: 'common' | 'rare';
   opened: boolean;
   openTimer: number;
 }
@@ -668,6 +713,21 @@ const particles: Particle[] = [];
 const drops: Drop[] = [];
 const chests: Chest[] = [];
 const chainArcs: ChainArc[] = [];
+
+// Floating damage numbers
+interface DmgNumber { x: number; y: number; value: number; life: number; color: string; }
+const dmgNumbers: DmgNumber[] = [];
+function spawnDmgNumber(x: number, y: number, value: number, color = '#ffffff') {
+  // Merge with nearby recent number if same position
+  for (const d of dmgNumbers) {
+    if (d.life > 15 && Math.abs(d.x - x) < 10 && Math.abs(d.y - y) < 10) {
+      d.value += value;
+      d.life = 25;
+      return;
+    }
+  }
+  dmgNumbers.push({ x: x + (Math.random() - 0.5) * 6, y, value, life: 25, color });
+}
 
 // Ash rain (screen-space, permanent ambient)
 interface AshParticle { x: number; y: number; speed: number; size: number; alpha: number; }
@@ -732,9 +792,34 @@ const mouse = { x: 0, y: 0, down: false, clicked: false, rightClicked: false };
 
 window.addEventListener('keydown', e => {
   keys[e.key.toLowerCase()] = true;
+  // Title screen input handling
+  if (game.state === 'title') {
+    if (titleState.mode === 1) {
+      // Name typing — intercept keys before they go to the keys{} map
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        titleState.nameInput = titleState.nameInput.slice(0, -1);
+      } else if (e.key === 'Tab' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); // handled in updateTitle
+      } else if (e.key === 'Enter' || e.key === 'Escape') {
+        // handled in updateTitle
+      } else if (e.key.length === 1 && titleState.nameInput.length < 10) {
+        const ch = e.key.toUpperCase();
+        if (/[A-Z0-9 ]/.test(ch)) titleState.nameInput += ch;
+      }
+      return;
+    }
+    // All other title state input handled in updateTitle via keys object
+    return;
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    if (game.state === 'playing') { game.state = 'paused'; }
+    else if (game.state === 'paused') { game.state = 'playing'; }
+  }
   if (e.key === 'Tab') { e.preventDefault(); game.codexOpen = !game.codexOpen; }
   if (e.key.toLowerCase() === 'm') { Music.nextTrack(); }
-  if (e.key === 'Backspace') { e.preventDefault(); resetGame(); }
+  // Backspace no longer resets — use pause menu instead
 });
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 canvas.addEventListener('mousemove', e => {
@@ -746,7 +831,7 @@ let audioStarted = false;
 canvas.addEventListener('mousedown', e => {
   if (e.button === 0) { mouse.down = true; mouse.clicked = true; }
   if (e.button === 2) { mouse.rightClicked = true; }
-  if (!audioStarted) { audioStarted = true; Sound.init(); Music.setTrack(0); Music.start(); }
+  if (!audioStarted) { audioStarted = true; Sound.init(); Music.setTrack(5); Music.start(); } // ABYSS track on title
 });
 canvas.addEventListener('mouseup', e => { if (e.button === 0) mouse.down = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -815,20 +900,21 @@ function findSpawnPos(): Vec | null {
 
 function makeEnemy(pos: Vec, type: Enemy['type'], diff: ReturnType<typeof getDifficulty>): Enemy {
   const stats: Record<string, { hp: number; speed: number }> = {
-    scout:    { hp: 2,  speed: 0.55 },
-    brute:    { hp: 5,  speed: 0.35 },
-    dasher:   { hp: 3,  speed: 0.3 },   // slow walk, fast dash
-    splitter: { hp: 4,  speed: 0.45 },
-    tank:     { hp: 12, speed: 0.18 },
-    swarm:    { hp: 1,  speed: 0.7 },
-    exploder: { hp: 2,  speed: 0.6 },
-    caster:   { hp: 3,  speed: 0.25 },
+    scout:    { hp: 4,  speed: 0.55 },
+    brute:    { hp: 10, speed: 0.35 },
+    dasher:   { hp: 6,  speed: 0.3 },
+    splitter: { hp: 8,  speed: 0.45 },
+    tank:     { hp: 25, speed: 0.18 },
+    swarm:    { hp: 2,  speed: 0.7 },
+    exploder: { hp: 4,  speed: 0.6 },
+    caster:   { hp: 6,  speed: 0.25 },
   };
   const s = stats[type] || stats.scout;
+  const coopMult = players.filter(p => !p.dead).length > 1 ? 1.5 : 1;
   return {
     x: pos.x, y: pos.y,
-    hp: Math.ceil(s.hp * diff.hpMult),
-    maxHp: Math.ceil(s.hp * diff.hpMult),
+    hp: Math.ceil(s.hp * diff.hpMult * coopMult),
+    maxHp: Math.ceil(s.hp * diff.hpMult * coopMult),
     speed: s.speed * diff.speedMult,
     baseSpeed: s.speed * diff.speedMult,
     type,
@@ -898,7 +984,8 @@ function spawnMiniBoss() {
   const pos = findSpawnPos();
   if (!pos) return;
   const diff = getDifficulty();
-  const hp = Math.ceil(15 * diff.hpMult);
+  const coopMult = players.filter(p => !p.dead).length > 1 ? 1.5 : 1;
+  const hp = Math.ceil(15 * diff.hpMult * coopMult);
   enemies.push({
     x: pos.x, y: pos.y,
     hp, maxHp: hp,
@@ -917,7 +1004,8 @@ function spawnBoss() {
   const pos = findSpawnPos();
   if (!pos) return;
   const diff = getDifficulty();
-  const hp = Math.ceil(40 * diff.hpMult);
+  const coopMult = players.filter(p => !p.dead).length > 1 ? 1.5 : 1;
+  const hp = Math.ceil(40 * diff.hpMult * coopMult);
   enemies.push({
     x: pos.x, y: pos.y,
     hp, maxHp: hp,
@@ -937,7 +1025,8 @@ function spawnSuperBoss() {
   const pos = findSpawnPos();
   if (!pos) return;
   const diff = getDifficulty();
-  const hp = Math.ceil(120 * diff.hpMult);
+  const coopMult = players.filter(p => !p.dead).length > 1 ? 1.5 : 1;
+  const hp = Math.ceil(120 * diff.hpMult * coopMult);
   enemies.push({
     x: pos.x, y: pos.y,
     hp, maxHp: hp,
@@ -1012,46 +1101,71 @@ function dist2(a: Vec, b: Vec): number {
 // ── Selection screen ──
 const MAX_UPGRADES = 6; // max distinct upgrade types
 
-function openSelection(type: 'levelup' | 'chest_common' | 'chest_rare' | 'skill_select', forPlayerIndex: number = game.selectingPlayer) {
-  game.selectingPlayer = forPlayerIndex;
-  setPlayerContext(players[forPlayerIndex]);
+function openSelection(type: 'levelup' | 'chest_common' | 'chest_rare', forPlayerIndex: number = 0) {
   game.selectionType = type;
-  game.selectionHover = -1;
   game.selectionDelay = 20;
   if (type === 'levelup') Sound.levelUp();
   else Sound.chestOpen();
 
-  if (type === 'skill_select') {
-    // Super boss: choose a skill
-    game.selectionOptions = pickRandom(SKILLS, 3);
-    game.state = 'skill_select';
-  } else if (type === 'chest_rare') {
-    // Boss chest: affixes + super rares only (no skills)
-    const ps = players[forPlayerIndex];
-    const availableAffixes = AFFIXES.filter(a => !ps.activeAffixes.includes(a.id));
-    const availableSuperRares = SUPER_RARES.filter(s => !ps.activeSuperRares.includes(s.id));
-    const allRare = [...availableAffixes, ...availableSuperRares];
-
-    if (allRare.length === 0) {
-      const fallback = pickRandomUpgrades(3);
-      if (fallback.length === 0) { ps.pendingLevelUps = 0; game.state = 'playing'; return; }
-      game.selectionOptions = fallback;
-      game.state = 'chest_common';
-    } else {
-      game.selectionOptions = pickRandom(allRare, 3);
-      game.state = 'chest_rare';
+  // For level ups, open for BOTH alive players simultaneously
+  if (type === 'levelup') {
+    for (const ps of players) {
+      if (ps.dead || ps.pendingLevelUps <= 0) {
+        ps.selectionDone = true;
+        ps.selectionOptions = [];
+        continue;
+      }
+      ps.pendingLevelUps--; // consume one pending level up
+      ps.selectionDone = false;
+      ps.selectionHover = -1;
+      game.selectingPlayer = ps.playerIndex;
+      setPlayerContext(ps);
+      const upgrades = pickRandomUpgrades(3);
+      if (upgrades.length === 0) {
+        ps.pendingLevelUps = 0;
+        ps.selectionDone = true;
+        ps.selectionOptions = [];
+        continue;
+      }
+      ps.selectionOptions = upgrades;
     }
-  } else {
-    const upgrades = pickRandomUpgrades(3);
-    if (upgrades.length === 0) {
-      // All upgrades maxed — skip selection, drain pending
-      players[forPlayerIndex].pendingLevelUps = 0;
-      game.state = 'playing';
-      return;
-    }
-    game.selectionOptions = upgrades;
-    game.state = type === 'levelup' ? 'levelup' : 'chest_common';
+    // Restore context
+    setPlayerContext(players[0]);
+    game.state = 'levelup';
+    return;
   }
+
+  // Chests = both alive players get their own selection (split screen)
+  for (const ps of players) {
+    if (ps.dead) {
+      ps.selectionDone = true;
+      ps.selectionOptions = [];
+      continue;
+    }
+    ps.selectionDone = false;
+    ps.selectionHover = -1;
+    game.selectingPlayer = ps.playerIndex;
+    setPlayerContext(ps);
+
+    if (type === 'chest_rare') {
+      const availableAffixes = AFFIXES.filter(a => !ps.activeAffixes.includes(a.id));
+      const availableSuperRares = SUPER_RARES.filter(s => !ps.activeSuperRares.includes(s.id));
+      const allRare = [...availableAffixes, ...availableSuperRares];
+      if (allRare.length === 0) {
+        const fallback = pickRandomUpgrades(3);
+        if (fallback.length === 0) { ps.selectionDone = true; ps.selectionOptions = []; continue; }
+        ps.selectionOptions = fallback;
+      } else {
+        ps.selectionOptions = pickRandom(allRare, 3);
+      }
+    } else {
+      const upgrades = pickRandomUpgrades(3);
+      if (upgrades.length === 0) { ps.selectionDone = true; ps.selectionOptions = []; continue; }
+      ps.selectionOptions = upgrades;
+    }
+  }
+  setPlayerContext(players[0]);
+  game.state = type === 'chest_rare' ? 'chest_rare' : 'chest_common';
 }
 
 function pickRandomUpgrades(n: number): Upgrade[] {
@@ -1126,35 +1240,29 @@ function isSkill(opt: any): opt is Skill { return 'cooldown' in opt; }
 function isSuperRare(opt: any): opt is SuperRare { return !('apply' in opt) && !('cooldown' in opt) && SUPER_RARES.some(s => s.id === opt.id); }
 function isAffix(opt: any): opt is Affix { return !('apply' in opt) && !('cooldown' in opt) && AFFIXES.some(a => a.id === opt.id); }
 
-function selectOption(index: number) {
-  if (index < 0 || index >= game.selectionOptions.length) return;
+function selectOptionForPlayer(playerIdx: number, index: number) {
+  const ps = players[playerIdx];
+  if (ps.selectionDone) return;
+  if (index < 0 || index >= ps.selectionOptions.length) return;
   Sound.select();
-  const option = game.selectionOptions[index];
-  const ps = players[game.selectingPlayer];
+  const option = ps.selectionOptions[index];
   setPlayerContext(ps);
 
   if (isSkill(option)) {
-    // Right-click skill
     ps.activeSkill = option;
     ps.skillCooldown = 0;
     spawnParticles(ps.x, ps.y, 30, option.color, 4);
   } else if (isSuperRare(option)) {
-    // Super rare
     ps.activeSuperRares.push(option.id);
     spawnParticles(ps.x, ps.y, 35, option.color, 5);
-    // Apply immediate effects
     if (option.id === 'drone') ps.droneCount++;
-    if (option.id === 'shadow_clone') {
-      ps.shadowClone = { x: ps.x, y: ps.y, trail: [] };
-    }
+    if (option.id === 'shadow_clone') ps.shadowClone = { x: ps.x, y: ps.y, trail: [] };
     if (option.id === 'thunder') ps.thunderTimer = 180;
     if (option.id === 'magnet_pulse') ps.magnetPulseTimer = 600;
   } else if (isAffix(option)) {
-    // Weapon affix
     ps.activeAffixes.push(option.id);
     spawnParticles(ps.x, ps.y, 30, option.color, 4);
   } else {
-    // Upgrade
     const upgrade = option as Upgrade;
     const currentLv = ps.upgradeLevels.get(upgrade.id) || 0;
     const newLv = currentLv + 1;
@@ -1163,22 +1271,24 @@ function selectOption(index: number) {
     spawnParticles(ps.x, ps.y, 20, '#8899aa', 3);
   }
 
-  game.selectionOptions = [];
+  ps.selectionOptions = [];
+  ps.selectionDone = true;
 
-  // Check for queued level ups for this player
-  if (ps.pendingLevelUps > 0) {
-    ps.pendingLevelUps--;
-    openSelection('levelup', ps.playerIndex);
-  } else {
-    // Check if other player has pending level ups
-    const otherPs = players[1 - game.selectingPlayer];
-    if (!otherPs.dead && otherPs.pendingLevelUps > 0) {
-      otherPs.pendingLevelUps--;
-      openSelection('levelup', otherPs.playerIndex);
+  // Check if both players are done
+  if (players.every(p => p.selectionDone)) {
+    // Check if any player has more pending level ups
+    const anyPending = players.some(p => !p.dead && p.pendingLevelUps > 0);
+    if (anyPending) {
+      openSelection('levelup');
     } else {
       game.state = 'playing';
     }
   }
+}
+
+// Legacy wrapper (for chest/skill selections — single player)
+function selectOption(index: number) {
+  selectOptionForPlayer(game.selectingPlayer, index);
 }
 
 // ── Affix effects ──
@@ -1323,11 +1433,38 @@ function applyComboOnHit(_l: Laser, _hitEnemy: Enemy) {
 
 // ── UPDATE ──
 function update() {
+  // Title screen
+  if (game.state === 'title') {
+    updateTitle();
+    return;
+  }
+
   // Codex pauses the game
   if (game.codexOpen) return;
 
+  // Pause screen
+  if (game.state === 'paused') {
+    if (keys['arrowdown'] || keys['s']) { titleState.pauseCursor = 1; keys['arrowdown'] = false; keys['s'] = false; }
+    if (keys['arrowup'] || keys['z']) { titleState.pauseCursor = 0; keys['arrowup'] = false; keys['z'] = false; }
+    if (keys['enter'] || keys[' ']) {
+      keys['enter'] = false; keys[' '] = false;
+      if (titleState.pauseCursor === 0) game.state = 'playing';
+      else resetGame();
+    }
+    // Mouse clicks on buttons
+    if (mouse.clicked) {
+      const btnW = 200, btnX = VIEW_W / 2 - btnW / 2;
+      if (mouse.x >= btnX && mouse.x <= btnX + btnW) {
+        if (mouse.y >= VIEW_H / 2 + 5 && mouse.y <= VIEW_H / 2 + 30) { game.state = 'playing'; }
+        if (mouse.y >= VIEW_H / 2 + 35 && mouse.y <= VIEW_H / 2 + 60) { resetGame(); }
+      }
+      mouse.clicked = false;
+    }
+    return;
+  }
+
   // Handle selection screens
-  if (game.state === 'levelup' || game.state === 'chest_common' || game.state === 'chest_rare' || game.state === 'skill_select') {
+  if (game.state === 'levelup' || game.state === 'chest_common' || game.state === 'chest_rare') {
     updateSelection();
     return;
   }
@@ -2256,6 +2393,10 @@ function update() {
           e.hp -= l.damage;
           e.hitFlash = 8;
           spawnParticles(l.x, l.y, 8, l.color, 2);
+          spawnDmgNumber(e.x, e.y - 6, Math.floor(l.damage));
+          // Track total damage for nearest player
+          const dmgOwner = players.filter(p => !p.dead).reduce((best, p) => dist2(p, e) < dist2(best, e) ? p : best, players[0]);
+          dmgOwner.totalDamage += l.damage;
 
           // Affix effects (use P1 context for shared lasers)
           applyAffixOnHit(l.x, l.y, l.damage, e, players[0]);
@@ -2715,17 +2856,21 @@ function update() {
 
     if (ddist < nearDr.pickupRadius) {
       if (dr.type === 'xp') {
-        nearDr.xp += dr.value;
+        game.xp += dr.value;
         spawnParticles(dr.x, dr.y, 5, COL.xpOrb, 1);
-        while (nearDr.xp >= nearDr.xpToLevel) {
-          nearDr.xp -= nearDr.xpToLevel;
-          nearDr.level++;
-          nearDr.xpToLevel = Math.floor(nearDr.xpToLevel * 1.15);
-          nearDr.pendingLevelUps++;
+        while (game.xp >= game.xpToLevel) {
+          game.xp -= game.xpToLevel;
+          game.level++;
+          game.xpToLevel = Math.floor(game.xpToLevel * 1.15);
+          // Both alive players get a pending level up
+          for (const pp of players) { if (!pp.dead) pp.pendingLevelUps++; }
         }
-        if (nearDr.pendingLevelUps > 0 && game.state === 'playing') {
-          nearDr.pendingLevelUps--;
-          openSelection('levelup', nearDr.playerIndex);
+        // Open selection for all players with pending level ups
+        if (game.state === 'playing') {
+          const anyPending = players.some(pp => !pp.dead && pp.pendingLevelUps > 0);
+          if (anyPending) {
+            openSelection('levelup');
+          }
         }
       } else if (dr.type === 'heart') {
         if (nearDr.hp < nearDr.maxHp) {
@@ -2758,7 +2903,7 @@ function update() {
       ch.opened = true;
       ch.openTimer = 60;
       spawnParticles(ch.x, ch.y, 25, ch.rarity === 'rare' ? COL.chestRare : COL.chestLock, 3);
-      openSelection(ch.rarity === 'skill' ? 'skill_select' : ch.rarity === 'rare' ? 'chest_rare' : 'chest_common', chestOpener);
+      openSelection(ch.rarity === 'rare' ? 'chest_rare' : 'chest_common', chestOpener);
       // Drop bonus XP
       for (let j = 0; j < 8; j++) {
         const angle = Math.random() * Math.PI * 2;
@@ -2784,6 +2929,13 @@ function update() {
     p.dx *= 0.95; p.dy *= 0.95;
     p.life--;
     if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Update damage numbers
+  for (let i = dmgNumbers.length - 1; i >= 0; i--) {
+    dmgNumbers[i].y -= 0.4;
+    dmgNumbers[i].life--;
+    if (dmgNumbers[i].life <= 0) dmgNumbers.splice(i, 1);
   }
 
   // 5 minute death wall
@@ -2813,6 +2965,9 @@ function update() {
     // Mark player dead
     if (pp.hp <= 0) {
       pp.dead = true;
+      pp.deathX = pp.x;
+      pp.deathY = pp.y;
+      pp.reviveProgress = 0;
       // Death explosion
       for (let ring = 0; ring < 3; ring++) {
         for (let a = 0; a < 16; a++) {
@@ -2827,6 +2982,44 @@ function update() {
       }
       spawnParticles(pp.x, pp.y, 30, pp.visorColor, 5);
       game.shakeTimer = 12;
+    }
+  }
+
+  // Revive system — alive player can revive dead player by standing near their death position
+  const REVIVE_RADIUS = 50;
+  const REVIVE_SPEED = 0.004; // ~4s to full revive (250 frames)
+  const REVIVE_DECAY = 0.002; // decays slower than it fills
+  for (const deadP of players) {
+    if (!deadP.dead) continue;
+    const aliveP = players.find(p => !p.dead);
+    if (!aliveP) break;
+    const dx = aliveP.x - deadP.deathX, dy = aliveP.y - deadP.deathY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < REVIVE_RADIUS) {
+      deadP.reviveProgress = Math.min(1, deadP.reviveProgress + REVIVE_SPEED);
+      // Particles while reviving
+      if (game.time % 8 === 0) {
+        const angle = Math.random() * Math.PI * 2;
+        particles.push({
+          x: deadP.deathX + Math.cos(angle) * 20, y: deadP.deathY + Math.sin(angle) * 20,
+          dx: -Math.cos(angle) * 0.5, dy: -Math.sin(angle) * 0.5,
+          life: 20, maxLife: 20, color: deadP.visorColor, size: 2,
+        });
+      }
+      if (deadP.reviveProgress >= 1) {
+        // Revived!
+        deadP.dead = false;
+        deadP.hp = Math.floor(deadP.maxHp * 0.5);
+        deadP.x = deadP.deathX;
+        deadP.y = deadP.deathY;
+        deadP.invincible = 120;
+        deadP.reviveProgress = 0;
+        spawnParticles(deadP.deathX, deadP.deathY, 30, deadP.visorColor, 4);
+        spawnParticles(deadP.deathX, deadP.deathY, 20, '#ffffff', 3);
+        game.shakeTimer = 8;
+      }
+    } else {
+      deadP.reviveProgress = Math.max(0, deadP.reviveProgress - REVIVE_DECAY);
     }
   }
 
@@ -2860,63 +3053,114 @@ function update() {
   mouse.clicked = false;
 }
 
-function getCardLayout() {
-  const cardW = 120;
+function getCardLayout(halfWidth = false, leftHalf = true) {
+  const cardW = halfWidth ? 90 : 120;
   const cardH = 120;
-  const gap = 12;
-  const n = game.selectionOptions.length;
+  const gap = halfWidth ? 6 : 12;
+  const areaW = halfWidth ? VIEW_W / 2 : VIEW_W;
+  const offsetX = halfWidth && !leftHalf ? VIEW_W / 2 : 0;
+  const n = 3;
   const totalW = cardW * n + gap * (n - 1);
-  const startX = (VIEW_W - totalW) / 2;
+  const startX = offsetX + (areaW - totalW) / 2;
   const startY = (VIEW_H - cardH) / 2 + 15;
   return { cardW, cardH, gap, startX, startY };
 }
 
-// Get sorted order for selection options (owned first)
-function getSortedSelectionMap(): number[] {
-  const indices = game.selectionOptions.map((_, i) => i);
+function getSortedSelectionMapForPlayer(ps: PlayerState): number[] {
+  const indices = ps.selectionOptions.map((_, i) => i);
   indices.sort((a, b) => {
-    const aOpt = game.selectionOptions[a];
-    const bOpt = game.selectionOptions[b];
-    const aOwned = 'apply' in aOpt && players[game.selectingPlayer].upgradeLevels.has((aOpt as Upgrade).id) ? 1 : 0;
-    const bOwned = 'apply' in bOpt && players[game.selectingPlayer].upgradeLevels.has((bOpt as Upgrade).id) ? 1 : 0;
+    const aOpt = ps.selectionOptions[a];
+    const bOpt = ps.selectionOptions[b];
+    const aOwned = 'apply' in aOpt && ps.upgradeLevels.has((aOpt as Upgrade).id) ? 1 : 0;
+    const bOwned = 'apply' in bOpt && ps.upgradeLevels.has((bOpt as Upgrade).id) ? 1 : 0;
     return bOwned - aOwned;
   });
-  return indices; // sortedMap[visualPos] = originalIndex
+  return indices;
 }
 
 function updateSelection() {
-  // Delay before accepting input (prevents accidental click from shooting)
   if (game.selectionDelay > 0) {
     game.selectionDelay--;
     mouse.clicked = false;
+    // Clear all keys to prevent held movement keys from auto-selecting
+    if (game.selectionDelay === 0) {
+      for (const k in keys) keys[k] = false;
+    }
     return;
   }
 
-  const { cardW, cardH, gap, startX, startY } = getCardLayout();
-  const sortedMap = getSortedSelectionMap();
+  const isSplitScreen = !players[0].dead && !players[1].dead
+    && (players[0].selectionOptions.length > 0 || players[1].selectionOptions.length > 0);
 
-  game.selectionHover = -1;
-  for (let vi = 0; vi < sortedMap.length; vi++) {
-    const cx = startX + vi * (cardW + gap);
-    if (mouse.x >= cx && mouse.x < cx + cardW &&
-        mouse.y >= startY - 4 && mouse.y < startY + cardH + 4) {
-      game.selectionHover = sortedMap[vi]; // map visual pos → original index
+  if (isSplitScreen) {
+    // P1 controls (ZQSD/1-2-3/mouse) — left half
+    const p1 = players[0];
+    if (!p1.selectionDone && p1.selectionOptions.length > 0) {
+      const layout1 = getCardLayout(true, true);
+      const sorted1 = getSortedSelectionMapForPlayer(p1);
+      // Mouse hover → visual position
+      const n1 = sorted1.length;
+      let mouseVisual1 = -1;
+      for (let vi = 0; vi < n1; vi++) {
+        const cx = layout1.startX + vi * (layout1.cardW + layout1.gap);
+        if (mouse.x >= cx && mouse.x < cx + layout1.cardW &&
+            mouse.y >= layout1.startY - 4 && mouse.y < layout1.startY + layout1.cardH + 4) {
+          mouseVisual1 = vi;
+        }
+      }
+      if (mouseVisual1 >= 0) p1.selectionHover = mouseVisual1;
+      if (p1.selectionHover < 0) p1.selectionHover = 0;
+      // Keyboard: Q/D to navigate with wrap
+      if (keys['q'] || keys['a']) { p1.selectionHover = (p1.selectionHover - 1 + n1) % n1; keys['q'] = false; keys['a'] = false; }
+      if (keys['d']) { p1.selectionHover = (p1.selectionHover + 1) % n1; keys['d'] = false; }
+      // Select: mouse click, space, or 1/2/3
+      if (mouse.clicked && mouseVisual1 >= 0) selectOptionForPlayer(0, sorted1[mouseVisual1]);
+      if (keys[' ']) { selectOptionForPlayer(0, sorted1[p1.selectionHover]); keys[' '] = false; }
+      if (keys['1'] || keys['&']) { if (sorted1[0] !== undefined) selectOptionForPlayer(0, sorted1[0]); keys['1'] = false; keys['&'] = false; }
+      if (keys['2'] || keys['é']) { if (sorted1[1] !== undefined) selectOptionForPlayer(0, sorted1[1]); keys['2'] = false; keys['é'] = false; }
+      if (keys['3'] || keys['"']) { if (sorted1[2] !== undefined) selectOptionForPlayer(0, sorted1[2]); keys['3'] = false; keys['"'] = false; }
     }
-  }
 
-  // Click or keyboard
-  if (mouse.clicked && game.selectionHover >= 0) {
-    selectOption(game.selectionHover);
-  }
-  // Keys 1/2/3 or numpad select by visual position
-  if (keys['1'] || keys['&']) { if (sortedMap[0] !== undefined) selectOption(sortedMap[0]); keys['1'] = false; keys['&'] = false; }
-  if (keys['2'] || keys['é']) { if (sortedMap[1] !== undefined) selectOption(sortedMap[1]); keys['2'] = false; keys['é'] = false; }
-  if (keys['3'] || keys['"']) { if (sortedMap[2] !== undefined) selectOption(sortedMap[2]); keys['3'] = false; keys['"'] = false; }
-  // P2 arrow key navigation
-  if (game.selectingPlayer === 1) {
-    if (keys['arrowleft']) { game.selectionHover = Math.max(0, (game.selectionHover < 0 ? 0 : game.selectionHover) - 1); keys['arrowleft'] = false; }
-    if (keys['arrowright']) { game.selectionHover = Math.min(sortedMap.length - 1, (game.selectionHover < 0 ? 0 : game.selectionHover) + 1); keys['arrowright'] = false; }
-    if (keys['enter'] && game.selectionHover >= 0) { selectOption(sortedMap[game.selectionHover] ?? game.selectionHover); keys['enter'] = false; }
+    // P2 controls (arrow keys + enter) — right half
+    // selectionHover = VISUAL position (0, 1, 2), not original index
+    const p2 = players[1];
+    if (!p2.selectionDone && p2.selectionOptions.length > 0) {
+      const sorted2 = getSortedSelectionMapForPlayer(p2);
+      const n2 = sorted2.length;
+      if (p2.selectionHover < 0) p2.selectionHover = 0;
+      if (keys['arrowleft']) { p2.selectionHover = (p2.selectionHover - 1 + n2) % n2; keys['arrowleft'] = false; }
+      if (keys['arrowright']) { p2.selectionHover = (p2.selectionHover + 1) % n2; keys['arrowright'] = false; }
+      if (keys['enter']) { selectOptionForPlayer(1, sorted2[p2.selectionHover]); keys['enter'] = false; }
+    }
+  } else {
+    // Single player selection — full screen
+    const activePs = players.find(p => !p.selectionDone && p.selectionOptions.length > 0) || players[game.selectingPlayer];
+    game.selectingPlayer = activePs.playerIndex;
+    const layout = getCardLayout(false, true);
+    const sortedMap = getSortedSelectionMapForPlayer(activePs);
+
+    // Mouse hover → visual position
+    const nS = sortedMap.length;
+    let mouseVisualS = -1;
+    for (let vi = 0; vi < nS; vi++) {
+      const cx = layout.startX + vi * (layout.cardW + layout.gap);
+      if (mouse.x >= cx && mouse.x < cx + layout.cardW &&
+          mouse.y >= layout.startY - 4 && mouse.y < layout.startY + layout.cardH + 4) {
+        mouseVisualS = vi;
+      }
+    }
+    if (mouseVisualS >= 0) game.selectionHover = mouseVisualS;
+    if (game.selectionHover < 0) game.selectionHover = 0;
+
+    // Keyboard nav with wrap
+    if (keys['q'] || keys['a'] || keys['arrowleft']) { game.selectionHover = (game.selectionHover - 1 + nS) % nS; keys['q'] = false; keys['a'] = false; keys['arrowleft'] = false; }
+    if (keys['d'] || keys['arrowright']) { game.selectionHover = (game.selectionHover + 1) % nS; keys['d'] = false; keys['arrowright'] = false; }
+    // Select
+    if (mouse.clicked && mouseVisualS >= 0) selectOption(sortedMap[mouseVisualS]);
+    if (keys[' '] || keys['enter']) { selectOption(sortedMap[game.selectionHover]); keys[' '] = false; keys['enter'] = false; }
+    if (keys['1'] || keys['&']) { if (sortedMap[0] !== undefined) selectOption(sortedMap[0]); keys['1'] = false; keys['&'] = false; }
+    if (keys['2'] || keys['é']) { if (sortedMap[1] !== undefined) selectOption(sortedMap[1]); keys['2'] = false; keys['é'] = false; }
+    if (keys['3'] || keys['"']) { if (sortedMap[2] !== undefined) selectOption(sortedMap[2]); keys['3'] = false; keys['"'] = false; }
   }
 
   mouse.clicked = false;
@@ -2933,6 +3177,9 @@ function onEnemyKill(e: Enemy, index: number) {
   spawnParticles(e.x, e.y, isSuperBoss ? 30 : 10, deathGlow, isSuperBoss ? 5 : 2);
   spawnDrops(e.x, e.y, e.type);
   game.kills++;
+  // Attribute kill to nearest alive player
+  const killer = players.filter(p => !p.dead).reduce((best, p) => dist2(p, e) < dist2(best, e) ? p : best, players[0]);
+  killer.kills++;
   if (isSuperBoss || isBoss) {
     Sound.bossKill();
     game.freezeFrame = isSuperBoss ? 12 : 6; // freeze frames
@@ -3007,7 +3254,7 @@ function onEnemyKill(e: Enemy, index: number) {
 
   // Chest drops
   if (isSuperBoss) {
-    chests.push({ x: e.x, y: e.y, rarity: 'skill', opened: false, openTimer: 0 });
+    chests.push({ x: e.x, y: e.y, rarity: 'rare', opened: false, openTimer: 0 });
     spawnParticles(e.x, e.y, 60, '#ff44ff', 7);
   } else if (isBoss) {
     chests.push({ x: e.x, y: e.y, rarity: 'rare', opened: false, openTimer: 0 });
@@ -3020,11 +3267,412 @@ function onEnemyKill(e: Enemy, index: number) {
   enemies.splice(index, 1);
 }
 
+function startGameFromTitle() {
+  // Apply selected colors
+  for (let i = 0; i < 2; i++) {
+    playerColors[i] = PLAYER_COLORS[titleState.selectedColors[i]].color;
+    players[i].visorColor = playerColors[i];
+  }
+  // Apply names
+  // 1P mode: kill P2 immediately
+  if (titleState.playerCount === 1) {
+    players[1].dead = true;
+  }
+  game.state = 'playing';
+  game.time = 0;
+  if (!audioStarted) { audioStarted = true; Sound.init(); }
+  Music.setTrack(0); Music.start(); // Start game music from track 0
+}
+
+function updateTitle() {
+  // Ash particles
+  if (titleState.ashParticles.length < 40 && Math.random() < 0.1) {
+    titleState.ashParticles.push({
+      x: Math.random() * VIEW_W, y: -5,
+      dx: (Math.random() - 0.5) * 0.3, dy: 0.2 + Math.random() * 0.3,
+      life: 300 + Math.random() * 200, maxLife: 500,
+    });
+  }
+  for (let i = titleState.ashParticles.length - 1; i >= 0; i--) {
+    const p = titleState.ashParticles[i];
+    p.x += p.dx; p.y += p.dy; p.life--;
+    if (p.life <= 0 || p.y > VIEW_H + 5) titleState.ashParticles.splice(i, 1);
+  }
+
+  // Escape = go back
+  if (keys['escape']) {
+    keys['escape'] = false;
+    if (titleState.mode === 2) { titleState.mode = 1; } // color → name
+    else if (titleState.mode === 1) {
+      if (titleState.editingPlayer === 1) { titleState.editingPlayer = 0; titleState.mode = 2; titleState.cursor = titleState.selectedColors[0]; } // J2 name → J1 color
+      else { titleState.mode = 0; titleState.cursor = 0; } // J1 name → mode select
+    }
+  }
+
+  if (titleState.mode === 0) {
+    // Mode select
+    if (keys['arrowdown'] || keys['s']) { titleState.cursor = 1; keys['arrowdown'] = false; keys['s'] = false; }
+    if (keys['arrowup'] || keys['z']) { titleState.cursor = 0; keys['arrowup'] = false; keys['z'] = false; }
+    if (keys['enter'] || keys[' ']) {
+      titleState.playerCount = titleState.cursor === 0 ? 1 : 2;
+      titleState.mode = 1; titleState.editingPlayer = 0; titleState.nameInput = playerNames[0];
+      keys['enter'] = false; keys[' '] = false;
+    }
+    if (keys['1'] || keys['&']) { titleState.playerCount = 1; titleState.mode = 1; titleState.editingPlayer = 0; titleState.nameInput = playerNames[0]; keys['1'] = false; keys['&'] = false; }
+    if (keys['2'] || keys['é']) { titleState.playerCount = 2; titleState.mode = 1; titleState.editingPlayer = 0; titleState.nameInput = playerNames[0]; keys['2'] = false; keys['é'] = false; }
+
+    if (mouse.clicked) {
+      const btnW = 160, btnX = VIEW_W / 2 - 80, btnH = 30;
+      if (mouse.x >= btnX && mouse.x <= btnX + btnW) {
+        if (mouse.y >= 140 && mouse.y <= 170) { titleState.playerCount = 1; titleState.mode = 1; titleState.editingPlayer = 0; titleState.nameInput = playerNames[0]; }
+        if (mouse.y >= 180 && mouse.y <= 210) { titleState.playerCount = 2; titleState.mode = 1; titleState.editingPlayer = 0; titleState.nameInput = playerNames[0]; }
+      }
+      mouse.clicked = false;
+    }
+  } else if (titleState.mode === 1) {
+    // Name input — Enter goes to color select
+    // (typing handled in keydown handler)
+    if (keys['enter']) {
+      keys['enter'] = false;
+      playerNames[titleState.editingPlayer] = titleState.nameInput || ('JOUEUR ' + (titleState.editingPlayer + 1));
+      titleState.mode = 2;
+      titleState.cursor = titleState.selectedColors[titleState.editingPlayer];
+    }
+  } else if (titleState.mode === 2) {
+    // Color select
+    if (keys['arrowleft'] || keys['q']) {
+      titleState.cursor = (titleState.cursor - 1 + PLAYER_COLORS.length) % PLAYER_COLORS.length;
+      if (titleState.editingPlayer === 1 && titleState.cursor === titleState.selectedColors[0])
+        titleState.cursor = (titleState.cursor - 1 + PLAYER_COLORS.length) % PLAYER_COLORS.length;
+      keys['arrowleft'] = false; keys['q'] = false;
+    }
+    if (keys['arrowright'] || keys['d']) {
+      titleState.cursor = (titleState.cursor + 1) % PLAYER_COLORS.length;
+      if (titleState.editingPlayer === 1 && titleState.cursor === titleState.selectedColors[0])
+        titleState.cursor = (titleState.cursor + 1) % PLAYER_COLORS.length;
+      keys['arrowright'] = false; keys['d'] = false;
+    }
+    if (keys['enter'] || keys[' ']) {
+      keys['enter'] = false; keys[' '] = false;
+      titleState.selectedColors[titleState.editingPlayer] = titleState.cursor;
+      if (titleState.editingPlayer === 0 && titleState.playerCount === 2) {
+        titleState.editingPlayer = 1;
+        titleState.mode = 1;
+        titleState.nameInput = playerNames[1];
+      } else {
+        startGameFromTitle();
+      }
+    }
+
+    // Mouse click on colors
+    if (mouse.clicked) {
+      const colSize = 20, colGap = 6;
+      const totalColW = PLAYER_COLORS.length * (colSize + colGap) - colGap;
+      const colStartX = VIEW_W / 2 - totalColW / 2;
+      const colY = 165;
+      for (let ci = 0; ci < PLAYER_COLORS.length; ci++) {
+        const cx = colStartX + ci * (colSize + colGap);
+        if (mouse.x >= cx && mouse.x <= cx + colSize && mouse.y >= colY && mouse.y <= colY + colSize) {
+          const isOther = titleState.editingPlayer === 1 && ci === titleState.selectedColors[0];
+          if (!isOther) {
+            titleState.cursor = ci;
+            titleState.selectedColors[titleState.editingPlayer] = ci;
+            // Confirm on click
+            if (titleState.editingPlayer === 0 && titleState.playerCount === 2) {
+              titleState.editingPlayer = 1;
+              titleState.mode = 1;
+              titleState.nameInput = playerNames[1];
+            } else {
+              startGameFromTitle();
+            }
+          }
+        }
+      }
+      mouse.clicked = false;
+    }
+  }
+}
+
+// Pre-generate title screen wall eyes — no overlap
+const titleEyes: { cx: number; cy: number; radius: number }[] = [];
+for (let attempt = 0; attempt < 200 && titleEyes.length < 18; attempt++) {
+  const r = 6 + Math.random() * 12;
+  const ex = 30 + Math.random() * (VIEW_W - 60);
+  const ey = 20 + Math.random() * (VIEW_H - 40);
+  // Check overlap with existing eyes (min distance = sum of radii * 2.5)
+  let overlaps = false;
+  for (const e of titleEyes) {
+    const dx = ex - e.cx, dy = ey - e.cy;
+    const minDist = (r + e.radius) * 2.5;
+    if (dx * dx + dy * dy < minDist * minDist) { overlaps = true; break; }
+  }
+  if (!overlaps) titleEyes.push({ cx: ex, cy: ey, radius: r });
+}
+
+// Pre-generate brick pattern for title
+const titleBricks: { x: number; y: number; w: number; h: number }[] = [];
+for (let row = 0; row < VIEW_H / 8; row++) {
+  const offset = (row % 2) * 12;
+  for (let col = -1; col < VIEW_W / 24 + 1; col++) {
+    titleBricks.push({
+      x: col * 24 + offset,
+      y: row * 8,
+      w: 22 + Math.floor(Math.random() * 3),
+      h: 7,
+    });
+  }
+}
+
+// Draw a wall eye like on the map — uses fillRect for pixel-perfect look
+function drawWallEye(cx: number, cy: number, radius: number, targetX: number, targetY: number, t: number) {
+  const r = Math.floor(radius);
+  const blinkPhase = Math.sin(t * 0.002 + cx * 0.1 + cy * 0.07);
+  const blinkScale = blinkPhase > 0.92 ? 0.1 : blinkPhase > 0.88 ? 0.5 : 1;
+
+  // Almond/pointed eye shape — wider in middle, tapers to points
+  const aspect = 2.2; // width/height ratio
+  const taper = 0.6; // how pointy the ends are (lower = pointier)
+
+  // Eye border
+  for (let dy = -(r + 2); dy <= r + 2; dy++) {
+    if (Math.abs(dy) > (r + 2) * blinkScale) continue;
+    const t2 = Math.abs(dy) / (r + 2);
+    const rowW = Math.floor((r + 2) * aspect * Math.pow(1 - t2 * t2, taper));
+    bx.fillStyle = '#1a0e28';
+    bx.fillRect(cx - rowW, cy + dy, rowW * 2, 1);
+  }
+
+  // Eye socket
+  for (let dy = -r; dy <= r; dy++) {
+    if (Math.abs(dy) > r * blinkScale) continue;
+    const t2 = Math.abs(dy) / r;
+    const rowW = Math.floor(r * aspect * Math.pow(1 - t2 * t2, taper));
+    bx.fillStyle = '#050308';
+    bx.fillRect(cx - rowW, cy + dy, rowW * 2, 1);
+  }
+
+  if (blinkScale < 0.3) return;
+
+  // Pupil direction
+  const dx = targetX - cx, dy2 = targetY - cy;
+  const dist = Math.sqrt(dx * dx + dy2 * dy2);
+  const maxOff = r * 0.3;
+  const offX = dist > 0 ? (dx / dist) * Math.min(maxOff, dist * 0.08) : 0;
+  const offY = dist > 0 ? (dy2 / dist) * Math.min(maxOff, dist * 0.08) : 0;
+
+  // Iris
+  const irisR = Math.floor(r * 0.45);
+  const ix = Math.floor(cx + offX), iy = Math.floor(cy + offY);
+  for (let iyd = -irisR; iyd <= irisR; iyd++) {
+    const iw = Math.floor(Math.sqrt(irisR * irisR - iyd * iyd));
+    bx.fillStyle = '#220033';
+    bx.fillRect(ix - iw, iy + iyd, iw * 2, 1);
+  }
+
+  // Pupil (bright red)
+  const pupilR = Math.max(2, Math.floor(r * 0.22));
+  bx.fillStyle = '#ff2244';
+  for (let pyd = -pupilR; pyd <= pupilR; pyd++) {
+    const pw = Math.floor(Math.sqrt(pupilR * pupilR - pyd * pyd));
+    bx.fillRect(ix - pw, iy + pyd, pw * 2, 1);
+  }
+
+  // Glow
+  bx.fillStyle = '#ff4466';
+  bx.globalAlpha = 0.3;
+  for (let gyd = -pupilR - 2; gyd <= pupilR + 2; gyd++) {
+    const gw = Math.floor(Math.sqrt((pupilR + 2) * (pupilR + 2) - gyd * gyd));
+    bx.fillRect(ix - gw, iy + gyd, gw * 2, 1);
+  }
+  bx.globalAlpha = 1;
+
+  // Highlight dot
+  bx.fillStyle = '#ff8888';
+  bx.fillRect(ix - Math.floor(pupilR * 0.4), iy - Math.floor(pupilR * 0.4), 2, 2);
+}
+
+function drawButton(label: string, x: number, y: number, w: number, h: number, hovered: boolean, color: string) {
+  // Background
+  bx.fillStyle = hovered ? '#1a1a33' : '#0a0a18';
+  bx.fillRect(x, y, w, h);
+
+  // Border
+  const borderCol = hovered ? '#ffffff' : color;
+  const bw = hovered ? 2 : 1;
+  bx.fillStyle = borderCol;
+  bx.fillRect(x, y, w, bw); bx.fillRect(x, y + h - bw, w, bw);
+  bx.fillRect(x, y, bw, h); bx.fillRect(x + w - bw, y, bw, h);
+
+  // Glow on hover
+  if (hovered) {
+    bx.fillStyle = color;
+    bx.globalAlpha = 0.1;
+    bx.fillRect(x, y, w, h);
+    bx.globalAlpha = 1;
+  }
+
+  // Text centered
+  const tx = x + (w - textWidth(label, 2)) / 2;
+  const ty = y + (h - 12) / 2;
+  drawText(label, tx, ty, hovered ? '#ffffff' : color, 2);
+}
+
+function drawTitle() {
+  const t = Date.now();
+
+  // Dark brick wall background
+  bx.fillStyle = '#080610';
+  bx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  // Brick pattern
+  for (const brick of titleBricks) {
+    // Use hash for slight color variation
+    const h = ((brick.x * 7 + brick.y * 13) & 0xff) / 255;
+    const r = Math.floor(8 + h * 6);
+    const g = Math.floor(6 + h * 4);
+    const b = Math.floor(14 + h * 8);
+    bx.fillStyle = `rgb(${r},${g},${b})`;
+    bx.fillRect(brick.x, brick.y, brick.w, brick.h);
+  }
+  // Mortar lines (gaps between bricks are the dark background showing through)
+
+  // Eyes embedded in the wall
+  for (const eye of titleEyes) {
+    drawWallEye(eye.cx, eye.cy, eye.radius, mouse.x, mouse.y, t);
+  }
+
+  // Ash particles
+  for (const p of titleState.ashParticles) {
+    const alpha = Math.min(1, p.life / 100);
+    bx.fillStyle = '#555544';
+    bx.globalAlpha = alpha * 0.6;
+    bx.fillRect(Math.floor(p.x), Math.floor(p.y), 1 + (p.life > 200 ? 1 : 0), 1);
+  }
+  bx.globalAlpha = 1;
+
+  // Dark vignette — strong, to focus on center
+  const vGrad = bx.createRadialGradient(VIEW_W / 2, 120, 100, VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.65);
+  vGrad.addColorStop(0, 'rgba(2,1,4,0)');
+  vGrad.addColorStop(0.6, 'rgba(2,1,4,0.7)');
+  vGrad.addColorStop(1, 'rgba(2,1,4,0.92)');
+  bx.fillStyle = vGrad;
+  bx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  // Title with pulse
+  const titlePulse = Math.sin(t * 0.002) * 0.15 + 0.85;
+  const title = 'WASTELAND SURVIVORS';
+  const titleX = VIEW_W / 2 - textWidth(title, 4) / 2;
+  // Glow behind title
+  bx.fillStyle = '#aa66ff';
+  bx.globalAlpha = titlePulse * 0.08;
+  bx.fillRect(titleX - 10, 60, textWidth(title, 4) + 20, 30);
+  bx.globalAlpha = 1;
+  drawText(title, titleX, 65, '#aa66ff', 4);
+
+  // Subtitle
+  const sub = 'SURVIVEZ AUX ABYSSES';
+  drawText(sub, VIEW_W / 2 - textWidth(sub, 1) / 2, 100, '#555577', 1);
+
+  // Separator line
+  bx.fillStyle = '#221833';
+  bx.fillRect(VIEW_W / 2 - 100, 115, 200, 1);
+
+  if (titleState.mode === 0) {
+    // Mode selection with proper buttons
+    const btnW = 160;
+    const btnH = 30;
+    const btnX = VIEW_W / 2 - btnW / 2;
+    const btn1Y = 140;
+    const btn2Y = 180;
+
+    const h1 = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= btn1Y && mouse.y <= btn1Y + btnH;
+    const h2 = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= btn2Y && mouse.y <= btn2Y + btnH;
+
+    // Keyboard cursor syncs with mouse hover
+    if (h1) titleState.cursor = 0;
+    if (h2) titleState.cursor = 1;
+
+    drawButton('1 JOUEUR', btnX, btn1Y, btnW, btnH, h1 || titleState.cursor === 0, '#aa66ff');
+    drawButton('2 JOUEURS', btnX, btn2Y, btnW, btnH, h2 || titleState.cursor === 1, '#44ddff');
+
+    // ">" indicator
+    const arrowY = titleState.cursor === 0 ? btn1Y : btn2Y;
+    drawText('>', btnX - 16, arrowY + 9, '#ffffff', 2);
+
+    const hint = 'OU APPUYEZ 1 / 2';
+    drawText(hint, VIEW_W / 2 - textWidth(hint, 1) / 2, 225, '#333355', 1);
+
+  } else if (titleState.mode === 1) {
+    // Name input screen
+    const pNum = titleState.editingPlayer + 1;
+    const label = titleState.playerCount === 2 ? 'JOUEUR ' + pNum : 'VOTRE NOM';
+    drawText(label, VIEW_W / 2 - textWidth(label, 2) / 2, 140, '#8888aa', 2);
+
+    const boxW = 200, boxH = 28, boxX = VIEW_W / 2 - boxW / 2, boxY = 170;
+    bx.fillStyle = '#111122';
+    bx.fillRect(boxX, boxY, boxW, boxH);
+    bx.fillStyle = '#666688';
+    bx.fillRect(boxX, boxY, boxW, 1); bx.fillRect(boxX, boxY + boxH, boxW, 1);
+    bx.fillRect(boxX, boxY, 1, boxH); bx.fillRect(boxX + boxW, boxY, 1, boxH);
+
+    const cur = Math.floor(t / 500) % 2 === 0 ? '_' : '';
+    const nameDisp = titleState.nameInput + cur;
+    drawText(nameDisp, boxX + (boxW - textWidth(nameDisp, 2)) / 2, boxY + 8, '#ffffff', 2);
+
+  } else if (titleState.mode === 2) {
+    // Color selection screen
+    const pName = playerNames[titleState.editingPlayer];
+    const label = 'COULEUR DE ' + pName;
+    drawText(label, VIEW_W / 2 - textWidth(label, 2) / 2, 135, '#8888aa', 2);
+
+    const colSize = 20, colGap = 6;
+    const totalColW = PLAYER_COLORS.length * (colSize + colGap) - colGap;
+    const colStartX = VIEW_W / 2 - totalColW / 2;
+    const colY = 165;
+
+    for (let ci = 0; ci < PLAYER_COLORS.length; ci++) {
+      const cx = colStartX + ci * (colSize + colGap);
+      const isSelected = titleState.cursor === ci;
+      const isOther = titleState.editingPlayer === 1 && titleState.selectedColors[0] === ci;
+      const isHovered = mouse.x >= cx && mouse.x <= cx + colSize && mouse.y >= colY && mouse.y <= colY + colSize;
+
+      bx.fillStyle = isOther ? '#222233' : PLAYER_COLORS[ci].color;
+      bx.fillRect(cx, colY, colSize, colSize);
+
+      if (isSelected) {
+        bx.fillStyle = '#ffffff';
+        bx.fillRect(cx - 2, colY - 2, colSize + 4, 2);
+        bx.fillRect(cx - 2, colY + colSize, colSize + 4, 2);
+        bx.fillRect(cx - 2, colY - 2, 2, colSize + 4);
+        bx.fillRect(cx + colSize, colY - 2, 2, colSize + 4);
+      } else if (isHovered && !isOther) {
+        bx.fillStyle = '#888888';
+        bx.fillRect(cx - 1, colY - 1, colSize + 2, 1);
+        bx.fillRect(cx - 1, colY + colSize, colSize + 2, 1);
+        bx.fillRect(cx - 1, colY - 1, 1, colSize + 2);
+        bx.fillRect(cx + colSize, colY - 1, 1, colSize + 2);
+      }
+
+      if (isOther) drawText('X', cx + colSize / 2 - 5, colY + colSize / 2 - 6, '#666666', 1);
+    }
+
+    const cName = PLAYER_COLORS[titleState.cursor].name;
+    drawText(cName, VIEW_W / 2 - textWidth(cName, 2) / 2, colY + colSize + 10, PLAYER_COLORS[titleState.cursor].color, 2);
+  }
+
+  // Version
+  const ver = 'V0.3';
+  drawText(ver, VIEW_W - textWidth(ver, 1) - 4, VIEW_H - 10, '#222233', 1);
+}
+
 function resetGame() {
-  Music.setTrack(0);
+  Music.setTrack(5); // ABYSS for title screen
   Music.start();
   game.time = 0;
-  game.state = 'playing';
+  game.state = 'title';
+  titleState.mode = 0;
+  titleState.editingPlayer = 0;
+  titleState.nameInput = '';
   game.kills = 0;
   game.deathScreenTimer = 0;
   game.won = false;
@@ -3036,6 +3684,9 @@ function resetGame() {
   game.megaBossSpawned = false;
   game.superBossTimer = Math.floor(2.5 * 60 * FPS);
   game.codexOpen = false;
+  game.xp = 0;
+  game.xpToLevel = 10;
+  game.level = 1;
   game.selectionOptions = [];
   game.selectingPlayer = 0;
   game.freezeFrame = 0;
@@ -3060,6 +3711,7 @@ function resetGame() {
   shockRings.length = 0;
   fallingMeteors.length = 0;
   bladeProjs.length = 0;
+  dmgNumbers.length = 0;
   beamLines.length = 0;
   veins.length = 0; // veins will regrow during new game
   spawnTimer = 60;
@@ -3562,7 +4214,7 @@ function drawDrop(dr: Drop, sx: number, sy: number) {
 
 function drawChest(ch: Chest, sx: number, sy: number) {
   const px = Math.floor(sx), py = Math.floor(sy);
-  const isRare = ch.rarity === 'rare' || ch.rarity === 'skill';
+  const isRare = ch.rarity === 'rare';
 
   if (ch.opened) {
     bx.fillStyle = '#996622';
@@ -3576,24 +4228,48 @@ function drawChest(ch: Chest, sx: number, sy: number) {
   } else {
     const bob = Math.sin(game.time * 0.05) * 2;
     const cy = py + bob;
-    // Body
+
+    // Glow aura behind chest
+    const glowPulse = Math.sin(game.time * 0.06) * 0.3 + 0.5;
+    bx.globalCompositeOperation = 'lighter';
+    bx.fillStyle = isRare ? '#ff44aa' : '#8866cc';
+    bx.globalAlpha = glowPulse * 0.25;
+    bx.beginPath();
+    bx.arc(px, cy, 18 + glowPulse * 6, 0, Math.PI * 2);
+    bx.fill();
+    bx.globalAlpha = 1;
+    bx.globalCompositeOperation = 'source-over';
+
+    // Body (bigger)
     bx.fillStyle = isRare ? COL.chestRare : COL.chestBody;
-    bx.fillRect(px - 10, cy - 5, 20, 12);
+    bx.fillRect(px - 12, cy - 6, 24, 14);
     // Lid
     bx.fillStyle = isRare ? '#cc6622' : '#aa7722';
-    bx.fillRect(px - 11, cy - 9, 22, 6);
-    // Lock
+    bx.fillRect(px - 13, cy - 10, 26, 6);
+    // Lock (shiny)
+    const lockPulse = Math.sin(game.time * 0.1) * 0.5 + 0.5;
     bx.fillStyle = isRare ? COL.chestRareGlow : COL.chestLock;
-    bx.fillRect(px - 2, cy - 3, 5, 5);
-    // Sparkle
-    if (Math.floor(game.time / 12) % 3 === 0) {
-      bx.fillStyle = '#ffffff';
-      bx.fillRect(px + 7, cy - 8, 2, 2);
+    bx.fillRect(px - 3, cy - 4, 6, 6);
+    bx.fillStyle = '#ffffff';
+    bx.globalAlpha = lockPulse * 0.6;
+    bx.fillRect(px - 1, cy - 2, 2, 2);
+    bx.globalAlpha = 1;
+
+    // Multiple sparkles
+    const sparklePhase = game.time * 0.15;
+    const sparkles = [
+      { ox: 9, oy: -9 }, { ox: -10, oy: -8 }, { ox: 7, oy: 4 }, { ox: -8, oy: 3 },
+    ];
+    for (let si = 0; si < sparkles.length; si++) {
+      const sp = sparkles[si];
+      const sAlpha = Math.sin(sparklePhase + si * 1.7) * 0.5 + 0.5;
+      if (sAlpha > 0.3) {
+        bx.fillStyle = isRare ? '#ffcc44' : '#ffffff';
+        bx.globalAlpha = sAlpha;
+        bx.fillRect(px + sp.ox, cy + sp.oy, 2, 2);
+      }
     }
-    if (isRare && Math.floor(game.time / 8) % 2 === 0) {
-      bx.fillStyle = '#ffcc44';
-      bx.fillRect(px - 8, cy - 7, 2, 2);
-    }
+    bx.globalAlpha = 1;
   }
 }
 
@@ -3617,6 +4293,13 @@ const PX: Record<string, number[]> = {
   '+':[0x0,0x4,0xe,0x4,0x0,0x0],'/':[0x1,0x1,0x2,0x4,0x8,0x8],'.':[0x0,0x0,0x0,0x0,0x0,0x4],
   '>':[0x4,0x2,0x1,0x2,0x4,0x0],'[':[0x6,0x4,0x4,0x4,0x4,0x6],']':[0x6,0x2,0x2,0x2,0x2,0x6],
   '!':[0x4,0x4,0x4,0x4,0x0,0x4],'%':[0x9,0x1,0x2,0x4,0x8,0x9],
+  '\'':[0x4,0x4,0x0,0x0,0x0,0x0],
+  '\xC9':[0x2,0xf,0x8,0xe,0x8,0xf], // É
+  '\xC8':[0x4,0xf,0x8,0xe,0x8,0xf], // È
+  '\xCA':[0x6,0xf,0x8,0xe,0x8,0xf], // Ê
+  '\xC0':[0x4,0x6,0x9,0xf,0x9,0x9], // À
+  '\xD9':[0x4,0x9,0x9,0x9,0x9,0x6], // Ù
+  '\xC7':[0x6,0x9,0x8,0x8,0x9,0x7], // Ç
 };
 
 // scale=1 → 1px per pixel (tiny HUD), scale=2 → 2px (normal), scale=3 → 3px (big titles)
@@ -3663,6 +4346,17 @@ function formatTime(frames: number): string {
 }
 
 function render() {
+  // Cursor: show on title/selection, hide during gameplay
+  canvas.style.cursor = (game.state === 'title' || game.state === 'levelup' || game.state === 'chest_common' || game.state === 'chest_rare') ? 'default' : 'none';
+
+  // Title screen
+  if (game.state === 'title') {
+    drawTitle();
+    // Blit to main canvas
+    ctx.drawImage(buf, 0, 0, VIEW_W * SCALE, VIEW_H * SCALE);
+    return;
+  }
+
   // Camera shake
   let shakeX = 0, shakeY = 0;
   if (game.shakeTimer > 0) {
@@ -3727,112 +4421,16 @@ function render() {
 
   // (fissures drawn before tiles — see above)
 
-  // ══ WALL EYES — massive eyes in wall clusters that follow the player ══
+  // ══ WALL EYES — reuse drawWallEye from title screen ══
   for (const we of wallEyes) {
     const sz = (we as any).size || 20;
     const esx = we.x - camX, esy = we.y - camY;
     if (esx < -sz * 2 || esx > VIEW_W + sz * 2 || esy < -sz * 2 || esy > VIEW_H + sz * 2) continue;
-
-    // Pupil tracks nearest player
-    const eyeTarget = players.reduce((best, p) => dist2(p, we) < dist2(best, we) ? p : best, players[0]);
-    const edx = eyeTarget.x - we.x, edy = eyeTarget.y - we.y;
-    const ed = Math.sqrt(edx * edx + edy * edy);
-    const maxLook = sz * 0.2;
-    const lookX = ed > 0 ? (edx / ed) * maxLook : 0;
-    const lookY = ed > 0 ? (edy / ed) * maxLook * 0.6 : 0;
-
-    const ex = Math.floor(esx), ey = Math.floor(esy);
-    // Blinking — eye closes and opens slowly
-    // Blink — open most of the time, closes over 10 frames, stays shut 5, reopens 10
-    const blinkTimer = (game.time + Math.floor(we.x * 7 + we.y * 13)) % 480; // blink every ~8s
-    let blinkPhase = 1; // 1 = fully open
-    if (blinkTimer < 10) blinkPhase = 1 - blinkTimer / 10;       // closing
-    else if (blinkTimer < 15) blinkPhase = 0;                     // shut
-    else if (blinkTimer < 25) blinkPhase = (blinkTimer - 15) / 10; // opening
-    if (blinkPhase < 0.05) continue;
-
-    const eyeW = sz, eyeH = sz * 0.65 * blinkPhase; // taller = more open
-    const pupilR = sz * 0.25;
-
-    // Eye socket — dark void
-    bx.fillStyle = '#000000';
-    bx.beginPath();
-    bx.ellipse(ex, ey, eyeW + 2, eyeH + 2, 0, 0, Math.PI * 2);
-    bx.fill();
-
-    // Eye shape — pointed at corners (almond shape)
-    bx.save();
-    bx.beginPath();
-    bx.moveTo(ex - eyeW, ey);
-    bx.quadraticCurveTo(ex, ey - eyeH, ex + eyeW, ey);
-    bx.quadraticCurveTo(ex, ey + eyeH, ex - eyeW, ey);
-    bx.closePath();
-    bx.clip();
-
-    // Iris — dark red fill
-    bx.fillStyle = '#1a0810';
-    bx.fillRect(ex - eyeW, ey - eyeH, eyeW * 2, eyeH * 2);
-
-    // Blood vessel veins in the eye
-    bx.strokeStyle = '#330815';
-    bx.globalAlpha = 0.4;
-    bx.lineWidth = 1;
-    for (let v = 0; v < 6; v++) {
-      const va = (v / 6) * Math.PI * 2;
-      bx.beginPath();
-      bx.moveTo(ex + Math.cos(va) * pupilR * 1.5, ey + Math.sin(va) * pupilR);
-      bx.lineTo(ex + Math.cos(va) * eyeW * 0.8, ey + Math.sin(va) * eyeH * 0.8);
-      bx.stroke();
-    }
-    bx.globalAlpha = 1;
-
-    // Iris circle (dark red/maroon)
-    bx.globalCompositeOperation = 'lighter';
-    bx.fillStyle = '#441122';
-    bx.globalAlpha = 0.5;
-    bx.beginPath();
-    bx.arc(ex + lookX, ey + lookY, pupilR * 1.8, 0, Math.PI * 2);
-    bx.fill();
-
-    // Pupil (slit, follows player)
-    bx.fillStyle = '#ff2244';
-    bx.globalAlpha = 0.7;
-    bx.beginPath();
-    bx.ellipse(ex + lookX, ey + lookY, pupilR * 0.4, pupilR, 0, 0, Math.PI * 2);
-    bx.fill();
-
-    // Hot center of pupil
-    bx.fillStyle = '#ff4466';
-    bx.globalAlpha = 0.5;
-    bx.beginPath();
-    bx.ellipse(ex + lookX, ey + lookY, pupilR * 0.2, pupilR * 0.6, 0, 0, Math.PI * 2);
-    bx.fill();
-
-    // Glint
-    bx.fillStyle = '#ffffff';
-    bx.globalAlpha = 0.25;
-    bx.beginPath();
-    bx.arc(ex + lookX - pupilR * 0.3, ey + lookY - pupilR * 0.4, pupilR * 0.15, 0, Math.PI * 2);
-    bx.fill();
-
-    bx.globalAlpha = 1;
-    bx.globalCompositeOperation = 'source-over';
-    bx.restore();
-
-    // Eye outline glow
-    bx.globalCompositeOperation = 'lighter';
-    bx.strokeStyle = '#ff2244';
-    bx.globalAlpha = 0.12 + Math.sin(game.time * 0.02 + we.x) * 0.06;
-    bx.lineWidth = 2;
-    bx.beginPath();
-    bx.moveTo(ex - eyeW, ey);
-    bx.quadraticCurveTo(ex, ey - eyeH, ex + eyeW, ey);
-    bx.quadraticCurveTo(ex, ey + eyeH, ex - eyeW, ey);
-    bx.closePath();
-    bx.stroke();
-    bx.globalAlpha = 1;
-    bx.lineWidth = 1;
-    bx.globalCompositeOperation = 'source-over';
+    // Target = nearest player
+    const eyeTarget = players.reduce((best, p) => !p.dead && dist2(p, we) < dist2(best, we) ? p : best, players[0]);
+    const targetSX = eyeTarget.x - camX;
+    const targetSY = eyeTarget.y - camY;
+    drawWallEye(Math.floor(esx), Math.floor(esy), Math.floor(sz * 0.5), targetSX, targetSY, game.time * 16);
   }
 
   // Chests
@@ -3938,10 +4536,56 @@ function render() {
     }
   }
 
-  // Draw both players
+  // Draw death auras for dead players (revive zones)
+  for (const pp of players) {
+    if (!pp.dead) continue;
+    const dx = pp.deathX - camX, dy = pp.deathY - camY;
+    if (dx < -60 || dx > VIEW_W + 60 || dy < -60 || dy > VIEW_H + 60) continue;
+    const REVIVE_RADIUS = 50;
+    const pulse = Math.sin(game.time * 0.05) * 0.15 + 0.35;
+    // Outer aura circle
+    bx.globalCompositeOperation = 'lighter';
+    bx.strokeStyle = pp.visorColor;
+    bx.globalAlpha = pulse * 0.4;
+    bx.lineWidth = 2;
+    bx.beginPath();
+    bx.arc(dx, dy, REVIVE_RADIUS, 0, Math.PI * 2);
+    bx.stroke();
+    // Inner glow
+    bx.globalAlpha = pulse * 0.1;
+    bx.fillStyle = pp.visorColor;
+    bx.beginPath();
+    bx.arc(dx, dy, REVIVE_RADIUS, 0, Math.PI * 2);
+    bx.fill();
+    bx.globalAlpha = 1;
+    bx.globalCompositeOperation = 'source-over';
+    // Skull/death marker
+    drawText('X', dx - 5, dy - 6, pp.visorColor, 2);
+    // Player name
+    const deadName = playerNames[pp.playerIndex];
+    drawText(deadName, dx - textWidth(deadName, 1) / 2, dy + 10, pp.visorColor, 1);
+    // Progress arc (fill portion of the circle based on reviveProgress)
+    if (pp.reviveProgress > 0) {
+      bx.strokeStyle = '#ffffff';
+      bx.lineWidth = 3;
+      bx.globalAlpha = 0.8;
+      bx.beginPath();
+      bx.arc(dx, dy, REVIVE_RADIUS - 3, -Math.PI / 2, -Math.PI / 2 + pp.reviveProgress * Math.PI * 2);
+      bx.stroke();
+      bx.globalAlpha = 1;
+      bx.lineWidth = 1;
+    }
+  }
+
+  // Draw both players + names above
   for (const pp of players) {
     if (pp.dead) continue;
-    if (game.state !== 'gameover') drawPlayerCoOp(pp, pp.x - camX, pp.y - camY);
+    if (game.state !== 'gameover') {
+      drawPlayerCoOp(pp, pp.x - camX, pp.y - camY);
+      const pName = playerNames[pp.playerIndex];
+      const nameX = pp.x - camX - textWidth(pName, 1) / 2;
+      drawText(pName, nameX, pp.y - camY - 14, pp.visorColor, 1);
+    }
   }
 
   // Per-player visuals (shield orb, skill, drones)
@@ -4425,6 +5069,18 @@ function render() {
   bx.globalAlpha = 1;
   bx.globalCompositeOperation = 'source-over';
 
+  // ── Floating damage numbers ──
+  for (const dn of dmgNumbers) {
+    const dnx = dn.x - camX, dny = dn.y - camY;
+    if (dnx < -20 || dnx > VIEW_W + 20 || dny < -20 || dny > VIEW_H + 20) continue;
+    const alpha = Math.min(1, dn.life / 10);
+    bx.globalAlpha = alpha;
+    const dmgText = '' + dn.value;
+    const scale = dn.value >= 10 ? 2 : 1;
+    drawText(dmgText, dnx - textWidth(dmgText, scale) / 2, dny, dn.color, scale);
+    bx.globalAlpha = 1;
+  }
+
   // ── Chest indicators (arrows pointing to off-screen chests) ──
   for (const ch of chests) {
     if (ch.opened) continue;
@@ -4435,21 +5091,36 @@ function render() {
     const margin = 16;
     const ix = Math.max(margin, Math.min(VIEW_W - margin, csx));
     const iy = Math.max(margin, Math.min(VIEW_H - margin, csy));
-    // Pulsing arrow
-    const pulse = Math.sin(game.time * 0.1) * 0.3 + 0.7;
-    const isRare = ch.rarity === 'rare' || ch.rarity === 'skill';
-    const color = isRare ? COL.chestRare : COL.chestLock;
+    // Big pulsing indicator with glow
+    const pulse = Math.sin(game.time * 0.08) * 0.4 + 0.6;
+    const fastPulse = Math.sin(game.time * 0.15) * 0.5 + 0.5;
+    const isRare = ch.rarity === 'rare';
+    const color = isRare ? '#ff44aa' : '#aa88ff';
+    const glowColor = isRare ? '#ff88cc' : '#cc88ff';
+
+    // Outer glow
     bx.globalCompositeOperation = 'lighter';
+    bx.fillStyle = glowColor;
+    bx.globalAlpha = pulse * 0.3;
+    bx.beginPath();
+    bx.arc(ix, iy, 12 + fastPulse * 4, 0, Math.PI * 2);
+    bx.fill();
+
+    // Inner diamond
     bx.fillStyle = color;
-    bx.globalAlpha = pulse;
-    // Diamond arrow shape
-    bx.fillRect(ix - 3, iy - 3, 6, 6);
-    bx.fillRect(ix - 1, iy - 5, 2, 2);
-    bx.fillRect(ix - 1, iy + 3, 2, 2);
-    bx.fillRect(ix - 5, iy - 1, 2, 2);
-    bx.fillRect(ix + 3, iy - 1, 2, 2);
+    bx.globalAlpha = pulse * 0.8 + 0.2;
+    bx.fillRect(ix - 5, iy - 5, 10, 10);
+    // Bright center
+    bx.fillStyle = '#ffffff';
+    bx.globalAlpha = fastPulse * 0.6;
+    bx.fillRect(ix - 2, iy - 2, 4, 4);
+
+    // Distance text
     bx.globalAlpha = 1;
     bx.globalCompositeOperation = 'source-over';
+    const dist = Math.floor(Math.sqrt((ch.x - player.x) ** 2 + (ch.y - player.y) ** 2) / TILE);
+    const distText = '' + dist + 'M';
+    drawText(distText, ix - textWidth(distText, 1) / 2, iy + 10, color, 1);
   }
 
   // ══ FOG OF WAR — radial darkness, light from player (before HUD) ══
@@ -4463,8 +5134,31 @@ function render() {
   // ── HUD ──
   drawHUD();
 
+  // ── Pause overlay ──
+  if (game.state === 'paused') {
+    bx.fillStyle = 'rgba(0,0,0,0.7)';
+    bx.fillRect(0, 0, VIEW_W, VIEW_H);
+    const pauseTitle = 'PAUSE';
+    drawText(pauseTitle, VIEW_W / 2 - textWidth(pauseTitle, 4) / 2, VIEW_H / 2 - 40, '#ffffff', 4);
+
+    const btnW = 200, btnX = VIEW_W / 2 - btnW / 2;
+    const r1Y = VIEW_H / 2 + 5, r2Y = VIEW_H / 2 + 35, btnH = 25;
+
+    // Hover detection
+    const h1 = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= r1Y && mouse.y <= r1Y + btnH;
+    const h2 = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= r2Y && mouse.y <= r2Y + btnH;
+    if (h1) titleState.pauseCursor = 0;
+    if (h2) titleState.pauseCursor = 1;
+
+    drawButton('REPRENDRE', btnX, r1Y, btnW, btnH, h1 || titleState.pauseCursor === 0, '#44ff88');
+    drawButton('MENU PRINCIPAL', btnX, r2Y, btnW, btnH, h2 || titleState.pauseCursor === 1, '#ff4444');
+
+    const arrowY = titleState.pauseCursor === 0 ? r1Y : r2Y;
+    drawText('>', btnX - 16, arrowY + 7, '#ffffff', 2);
+  }
+
   // ── Selection overlay ──
-  if (game.state === 'levelup' || game.state === 'chest_common' || game.state === 'chest_rare' || game.state === 'skill_select') {
+  if (game.state === 'levelup' || game.state === 'chest_common' || game.state === 'chest_rare') {
     drawSelectionScreen();
   }
 
@@ -4636,67 +5330,57 @@ function drawHUD() {
   bx.fillRect(4, 14, Math.floor(hpBarW * hpRatio), 8);
   bx.fillStyle = '#ffffff';
   bx.fillRect(4, 14, Math.floor(hpBarW * hpRatio), 1);
-  drawText('J1 ' + Math.max(0, p1.hp) + '/' + p1.maxHp, 6, 15, '#ffffff');
+  drawText(playerNames[0] + ' ' + Math.max(0, p1.hp) + '/' + p1.maxHp, 6, 15, '#ffffff', 1);
 
-  // ── P2 HP bar (right side) ──
+  // ── P2 HP bar (top-right, symmetric to P1) ──
   const p2 = players[1];
+  const p2hpX = VIEW_W - hpBarW - 6;
+  const p2hpY = 14;
   if (!p2.dead) {
     const p2hpR = Math.max(0, p2.hp / p2.maxHp);
     bx.fillStyle = '#220000';
-    bx.fillRect(VIEW_W - hpBarW - 56, 14, hpBarW, 8);
+    bx.fillRect(p2hpX, p2hpY, hpBarW, 8);
     const p2hpCol = p2hpR > 0.5 ? '#44cc44' : p2hpR > 0.25 ? '#ccaa22' : '#cc3333';
     bx.fillStyle = p2hpCol;
-    bx.fillRect(VIEW_W - hpBarW - 56, 14, Math.floor(hpBarW * p2hpR), 8);
+    bx.fillRect(p2hpX, p2hpY, Math.floor(hpBarW * p2hpR), 8);
     bx.fillStyle = '#ffffff';
-    bx.fillRect(VIEW_W - hpBarW - 56, 14, Math.floor(hpBarW * p2hpR), 1);
-    drawText('J2 ' + Math.max(0, p2.hp) + '/' + p2.maxHp, VIEW_W - hpBarW - 54, 15, '#ffffff');
+    bx.fillRect(p2hpX, p2hpY, Math.floor(hpBarW * p2hpR), 1);
+    drawText(playerNames[1] + ' ' + Math.max(0, p2.hp) + '/' + p2.maxHp, p2hpX + 2, p2hpY + 1, '#ffffff', 1);
   } else {
-    drawText('J2 MORT', VIEW_W - hpBarW - 54, 15, '#ff4444');
+    drawText(playerNames[1] + ' MORT', p2hpX + 2, p2hpY + 1, '#ff4444', 1);
   }
 
-  // Kills
-  drawText('V:' + game.kills, 4, 26, '#aaaaaa');
+  // (kills + damage shown on game over screen only)
 
-  // XP bars (P1 left half, P2 right half)
+  // Shared XP bar (full width, under timer)
   const xpBarY = VIEW_H - 10;
-  const halfBarW = (barW - 4) / 2;
-  // P1 XP
-  const xpRatio1 = p1.xp / p1.xpToLevel;
+  const xpBarW = barW;
+  const xpRatio = game.xp / game.xpToLevel;
   bx.fillStyle = '#113333';
-  bx.fillRect(4, xpBarY, halfBarW, 7);
+  bx.fillRect(4, xpBarY, xpBarW, 7);
   bx.fillStyle = COL.xpOrb;
-  bx.fillRect(4, xpBarY, Math.floor(halfBarW * xpRatio1), 7);
+  bx.fillRect(4, xpBarY, Math.floor(xpBarW * xpRatio), 7);
   bx.fillStyle = COL.xpOrbGlow;
-  bx.fillRect(4, xpBarY, Math.floor(halfBarW * xpRatio1), 1);
-  const lvText1 = 'J1 NV' + p1.level;
-  drawText(lvText1, 4 + halfBarW / 2 - textWidth(lvText1, 1) / 2, xpBarY + 1, '#ffffff', 1);
-  // P2 XP
-  if (!p2.dead) {
-    const xpRatio2 = p2.xp / p2.xpToLevel;
-    bx.fillStyle = '#113333';
-    bx.fillRect(4 + halfBarW + 4, xpBarY, halfBarW, 7);
-    bx.fillStyle = '#44ddff';
-    bx.fillRect(4 + halfBarW + 4, xpBarY, Math.floor(halfBarW * xpRatio2), 7);
-    bx.fillStyle = '#88eeff';
-    bx.fillRect(4 + halfBarW + 4, xpBarY, Math.floor(halfBarW * xpRatio2), 1);
-    const lvText2 = 'J2 NV' + p2.level;
-    drawText(lvText2, 4 + halfBarW + 4 + halfBarW / 2 - textWidth(lvText2, 1) / 2, xpBarY + 1, '#ffffff', 1);
+  bx.fillRect(4, xpBarY, Math.floor(xpBarW * xpRatio), 1);
+  const lvText = 'NV ' + game.level;
+  drawText(lvText, 4 + xpBarW / 2 - textWidth(lvText, 1) / 2, xpBarY + 1, '#ffffff', 1);
+
+  // Revive progress bar (shown when a player is being revived)
+  for (const deadP of players) {
+    if (!deadP.dead || deadP.reviveProgress <= 0) continue;
+    const revBarY = xpBarY - 12;
+    const revBarW = barW;
+    bx.fillStyle = '#111122';
+    bx.fillRect(4, revBarY, revBarW, 8);
+    bx.fillStyle = deadP.visorColor;
+    bx.fillRect(4, revBarY, Math.floor(revBarW * deadP.reviveProgress), 8);
+    bx.fillStyle = '#ffffff';
+    bx.fillRect(4, revBarY, Math.floor(revBarW * deadP.reviveProgress), 1);
+    const revText = 'REVIVE ' + playerNames[deadP.playerIndex];
+    drawText(revText, 4 + revBarW / 2 - textWidth(revText, 1) / 2, revBarY + 1, '#ffffff', 1);
   }
 
-  // Weapon name + affix icons (P1)
-  setPlayerContext(p1);
-  const wName = getWeaponName();
-  const wColor = getWeaponColor();
-  drawText(wName, 4, 38, wColor);
-
-  let affixX = 4 + textWidth(wName) + 4;
-  for (const affixId of p1.activeAffixes) {
-    const affix = AFFIXES.find(a => a.id === affixId);
-    if (affix) {
-      drawIcon(affix.icon, affixX, 39, affix.color);
-      affixX += 8;
-    }
-  }
+  // (weapon name + affix icons removed — HUD simplified)
 
   // Upgrade slots (P1 — bottom left, above XP bar)
   const barY = VIEW_H - 24;
@@ -4718,6 +5402,30 @@ function drawHUD() {
       const upgColor = lv >= MAX_UPGRADE_LEVEL ? '#44ff88' : '#8899aa';
       drawIcon(upg.icon, ux + i * 18 + 2, barY + 2, upgColor);
       drawText('' + lv, ux + i * 18 + 8, barY + 2, '#ffffff', 1);
+    }
+  }
+
+  // Upgrade slots (P2 — bottom right, above XP bar)
+  if (!p2.dead) {
+    const upgrades2 = Array.from(p2.upgradeLevels.entries());
+    const ux2 = VIEW_W - 4 - MAX_UPGRADES * 18;
+    for (let s = 0; s < MAX_UPGRADES; s++) {
+      bx.fillStyle = '#111122';
+      bx.fillRect(ux2 + s * 18, barY, 14, 12);
+      bx.fillStyle = '#222233';
+      bx.fillRect(ux2 + s * 18, barY, 14, 1);
+      bx.fillRect(ux2 + s * 18, barY + 11, 14, 1);
+      bx.fillRect(ux2 + s * 18, barY, 1, 12);
+      bx.fillRect(ux2 + s * 18 + 13, barY, 1, 12);
+    }
+    for (let i = 0; i < upgrades2.length; i++) {
+      const [id, lv] = upgrades2[i];
+      const upg = UPGRADES.find(u => u.id === id);
+      if (upg) {
+        const upgColor = lv >= MAX_UPGRADE_LEVEL ? '#44ff88' : '#8899aa';
+        drawIcon(upg.icon, ux2 + i * 18 + 2, barY + 2, upgColor);
+        drawText('' + lv, ux2 + i * 18 + 8, barY + 2, '#ffffff', 1);
+      }
     }
   }
 
@@ -4777,45 +5485,39 @@ function drawHUD() {
     drawText(tn, VIEW_W - textWidth(tn, 1) - 4, VIEW_H - 24, '#333344', 1);
   }
 
-  // Minimap
-  const mmX = VIEW_W - 52, mmY = 4, mmS = 48;
-  bx.fillStyle = 'rgba(0,0,0,0.5)';
-  bx.fillRect(mmX, mmY, mmS, mmS);
-  for (let y = 0; y < mmS; y++) {
-    for (let x = 0; x < mmS; x++) {
-      const tx = Math.floor(x / mmS * MAP_W);
-      const ty = Math.floor(y / mmS * MAP_H);
-      const t = map[ty]?.[tx] ?? 0;
-      if (t === 3) { bx.fillStyle = COL.darkRock; bx.fillRect(mmX + x, mmY + y, 1, 1); }
-      else if (t === 2) { bx.fillStyle = COL.rock1; bx.fillRect(mmX + x, mmY + y, 1, 1); }
-    }
-  }
-  // Both players on minimap
+  // Off-screen player indicators (co-op)
+  const alivePlayers = players.filter(p => !p.dead);
+  const midPXh = alivePlayers.length > 0 ? alivePlayers.reduce((s, p) => s + p.x, 0) / alivePlayers.length : players[0].x;
+  const midPYh = alivePlayers.length > 0 ? alivePlayers.reduce((s, p) => s + p.y, 0) / alivePlayers.length : players[0].y;
+  const hudCamX = midPXh - VIEW_W / 2;
+  const hudCamY = midPYh - VIEW_H / 2;
   for (const pp of players) {
     if (pp.dead) continue;
-    bx.fillStyle = pp.visorColor;
-    const pmx = mmX + (pp.x / (MAP_W * TILE)) * mmS;
-    const pmy = mmY + (pp.y / (MAP_H * TILE)) * mmS;
-    bx.fillRect(pmx - 1, pmy - 1, 2, 2);
-  }
-  bx.fillStyle = COL.enemyEye;
-  for (const e of enemies) {
-    const emx = mmX + (e.x / (MAP_W * TILE)) * mmS;
-    const emy = mmY + (e.y / (MAP_H * TILE)) * mmS;
-    if (e.type === 'superboss') {
-      bx.fillStyle = '#ff44ff';
-      bx.fillRect(emx - 2, emy - 2, 4, 4);
-      bx.fillStyle = COL.enemyEye;
-    } else if (e.type === 'boss') {
-      bx.fillStyle = COL.bossEye;
-      bx.fillRect(emx - 1, emy - 1, 3, 3);
-      bx.fillStyle = COL.enemyEye;
-    } else if (e.type === 'miniboss') {
-      bx.fillStyle = COL.minibossEye;
-      bx.fillRect(emx - 1, emy - 1, 2, 2);
-      bx.fillStyle = COL.enemyEye;
-    } else {
-      bx.fillRect(emx, emy, 1, 1);
+    const sx = pp.x - hudCamX, sy = pp.y - hudCamY;
+    if (sx < -10 || sx > VIEW_W + 10 || sy < -10 || sy > VIEW_H + 10) {
+      // Player is off-screen — draw arrow at edge
+      const cx = Math.max(20, Math.min(VIEW_W - 20, sx));
+      const cy = Math.max(20, Math.min(VIEW_H - 20, sy));
+      const pulse = Math.sin(game.time * 0.1) * 0.3 + 0.7;
+      bx.fillStyle = pp.visorColor;
+      bx.globalAlpha = pulse;
+      // Arrow pointing toward player
+      const arrowSize = 6;
+      bx.beginPath();
+      if (sx < -10) { // left
+        bx.moveTo(4, cy); bx.lineTo(4 + arrowSize, cy - arrowSize); bx.lineTo(4 + arrowSize, cy + arrowSize);
+      } else if (sx > VIEW_W + 10) { // right
+        bx.moveTo(VIEW_W - 4, cy); bx.lineTo(VIEW_W - 4 - arrowSize, cy - arrowSize); bx.lineTo(VIEW_W - 4 - arrowSize, cy + arrowSize);
+      } else if (sy < -10) { // top
+        bx.moveTo(cx, 4); bx.lineTo(cx - arrowSize, 4 + arrowSize); bx.lineTo(cx + arrowSize, 4 + arrowSize);
+      } else { // bottom
+        bx.moveTo(cx, VIEW_H - 4); bx.lineTo(cx - arrowSize, VIEW_H - 4 - arrowSize); bx.lineTo(cx + arrowSize, VIEW_H - 4 - arrowSize);
+      }
+      bx.fill();
+      bx.globalAlpha = 1;
+      // Player name
+      const pName = playerNames[pp.playerIndex];
+      drawText(pName, cx - textWidth(pName, 1) / 2, cy < VIEW_H / 2 ? cy + 10 : cy - 12, pp.visorColor, 1);
     }
   }
 }
@@ -4823,86 +5525,86 @@ function drawHUD() {
 // Stat gain description for each upgrade
 function getStatGain(id: string, newLv: number): string {
   switch (id) {
-    case 'fire_rate': return '-1 COOLDOWN';
-    case 'damage': return '+1 DMG';
-    case 'move_speed': return '+0.15 SPD';
-    case 'max_hp': return '+10 MAX HP';
-    case 'pickup_radius': return '+12 RANGE';
+    case 'fire_rate': return '-1 RECHARGE';
+    case 'damage': return '+1 D\xC9GATS';
+    case 'move_speed': return '+0.15 VIT';
+    case 'max_hp': return '+10 VIE MAX';
+    case 'pickup_radius': return '+12 PORT\xC9E';
     case 'projectile': return '+1 PROJ';
-    case 'pierce': return '+1 PIERCE';
-    case 'proj_size': return '+1 SIZE';
-    case 'proj_speed': return '+0.5 SPD';
+    case 'pierce': return '+1 PERFO';
+    case 'proj_size': return '+1 TAILLE';
+    case 'proj_speed': return '+0.5 VIT';
     case 'life_steal': return '+2% CHANCE';
-    case 'thorns': return '+2 DMG';
-    case 'orbital': return '+1 ORB';
-    case 'armor': return '-1 DMG TAKEN';
-    case 'dodge': return '+5% EVADE';
-    default: return 'LV ' + newLv;
+    case 'thorns': return '+2 D\xC9GATS';
+    case 'orbital': return '+1 ORBE';
+    case 'armor': return '-1 D\xC9GATS SUB';
+    case 'dodge': return '+5% ESQUIVE';
+    default: return 'NV ' + newLv;
   }
 }
 
-function drawSelectionScreen() {
-  bx.fillStyle = 'rgba(0,0,0,0.8)';
-  bx.fillRect(0, 0, VIEW_W, VIEW_H);
-
-  const isSkillSelect = game.state === 'skill_select';
+function drawPlayerSelectionHalf(ps: PlayerState, halfWidth: boolean, leftHalf: boolean) {
   const isRare = game.state === 'chest_rare';
   const isChest = game.state === 'chest_common' || isRare;
 
-  const { cardW, cardH, gap, startX, startY } = getCardLayout();
-  const selectPs = players[game.selectingPlayer];
+  const { cardW, cardH, gap, startX, startY } = getCardLayout(halfWidth, leftHalf);
+  const areaW = halfWidth ? VIEW_W / 2 : VIEW_W;
+  const offsetX = halfWidth && !leftHalf ? VIEW_W / 2 : 0;
+  const centerX = offsetX + areaW / 2;
+
+  // Player done = show waiting message
+  if (ps.selectionDone) {
+    const waitText = 'EN ATTENTE...';
+    drawText(waitText, centerX - textWidth(waitText, 2) / 2, VIEW_H / 2 - 6, '#555566', 2);
+    const jLabel = 'J' + (ps.playerIndex + 1);
+    drawText(jLabel, centerX - textWidth(jLabel, 1) / 2, VIEW_H / 2 + 14, ps.visorColor, 1);
+    return;
+  }
+
+  if (ps.selectionOptions.length === 0) return;
 
   // Player indicator
-  const playerLabel = 'JOUEUR ' + (game.selectingPlayer + 1);
-  drawText(playerLabel, (VIEW_W - textWidth(playerLabel, 2)) / 2, startY - 56, selectPs.visorColor, 2);
+  const playerLabel = 'J' + (ps.playerIndex + 1);
+  drawText(playerLabel, centerX - textWidth(playerLabel, 2) / 2, startY - 56, ps.visorColor, 2);
 
-  // Title — positioned just above the cards
-  const title = isSkillSelect ? 'CHOISIR COMP\xC9TENCE' : isRare ? 'BUTIN RARE' : isChest ? 'BUTIN BONUS' : 'MONT\xC9E DE NIVEAU';
-  const titleColor = isSkillSelect ? '#ff44ff' : isRare ? '#ff8844' : isChest ? '#ffcc44' : '#44eeff';
-  drawText(title, (VIEW_W - textWidth(title, 3)) / 2, startY - 40, titleColor, 3);
+  // Title
+  const title = isRare ? 'BUTIN RARE' : isChest ? 'BUTIN BONUS' : 'AMELIORATION';
+  const titleColor = isRare ? '#ff8844' : isChest ? '#ffcc44' : '#44eeff';
+  const titleScale = halfWidth ? 2 : 3;
+  drawText(title, centerX - textWidth(title, titleScale) / 2, startY - 40, titleColor, titleScale);
 
-  // Rarity subtitle
-  let subtitle = isSkillSelect ? '[ CLIC DROIT ]' : isRare ? '[ L\xC9GENDAIRE ]' : isChest ? '[ COMMUN ]' : '[ CHOISISSEZ UNE AM\xC9LIORATION ]';
-  const rarityColor = isSkillSelect ? '#cc44cc' : isRare ? '#ff6622' : isChest ? '#ccaa33' : '#6688aa';
-  drawText(subtitle, (VIEW_W - textWidth(subtitle, 1)) / 2, startY - 18, rarityColor, 1);
-
-  // Pending level ups count
-  if (selectPs.pendingLevelUps > 0 && !isChest && !isSkillSelect) {
-    const pendingText = '+' + selectPs.pendingLevelUps + ' EN PLUS';
-    drawText(pendingText, (VIEW_W - textWidth(pendingText, 1)) / 2, startY - 10, '#44eeff', 1);
-  }
-  // Slots indicator
+  // Slots
   if (game.state === 'levelup') {
-    const ownedCount = selectPs.upgradeLevels.size;
-    const slotsText = 'EMPLACEMENTS: ' + ownedCount + '/' + MAX_UPGRADES;
-    const slotsColor = ownedCount >= MAX_UPGRADES ? '#ff8844' : '#6688aa';
-    drawText(slotsText, (VIEW_W - textWidth(slotsText, 1)) / 2, startY - 10, slotsColor, 1);
+    const ownedCount = ps.upgradeLevels.size;
+    const slotsText = ownedCount + '/' + MAX_UPGRADES;
+    drawText(slotsText, centerX - textWidth(slotsText, 1) / 2, startY - 18, ownedCount >= MAX_UPGRADES ? '#ff8844' : '#6688aa', 1);
   }
 
-  // Sort: owned upgrades first for visual priority
-  const sorted = game.selectionOptions.map((opt, idx) => ({ opt, origIdx: idx }));
+  // Sort owned first
+  const sorted = ps.selectionOptions.map((opt, idx) => ({ opt, origIdx: idx }));
   sorted.sort((a, b) => {
-    const aOwned = 'apply' in a.opt && players[game.selectingPlayer].upgradeLevels.has((a.opt as Upgrade).id) ? 1 : 0;
-    const bOwned = 'apply' in b.opt && players[game.selectingPlayer].upgradeLevels.has((b.opt as Upgrade).id) ? 1 : 0;
+    const aOwned = 'apply' in a.opt && ps.upgradeLevels.has((a.opt as Upgrade).id) ? 1 : 0;
+    const bOwned = 'apply' in b.opt && ps.upgradeLevels.has((b.opt as Upgrade).id) ? 1 : 0;
     return bOwned - aOwned;
   });
+
+  const hoverVal = halfWidth ? ps.selectionHover : game.selectionHover;
 
   const t = game.time; // animation time
 
   for (let i = 0; i < sorted.length; i++) {
     const { opt, origIdx } = sorted[i];
     const cx = startX + i * (cardW + gap);
-    const hovered = game.selectionHover === origIdx;
+    const hovered = hoverVal === i; // compare to visual position
 
-    const optIsSkill = isSkill(opt);
     const optIsSuperRare = isSuperRare(opt);
     const optIsAffix = isAffix(opt);
-    const optIsUpgrade = !optIsSkill && !optIsSuperRare && !optIsAffix;
-    const isOwned = optIsUpgrade && players[game.selectingPlayer].upgradeLevels.has((opt as Upgrade).id);
-    const isHighRarity = optIsSkill || optIsSuperRare || optIsAffix;
+    const optIsUpgrade = !optIsSuperRare && !optIsAffix;
+    const isOwned = optIsUpgrade && ps.upgradeLevels.has((opt as Upgrade).id);
+    const isHighRarity = optIsSuperRare || optIsAffix;
 
     // Rarity color — owned items get cyan highlight
-    const rarityCol = optIsSkill ? '#44ffcc' : optIsSuperRare ? '#ff44ff' : optIsAffix ? '#ff8844' : isOwned ? '#44eeff' : '#8899aa';
+    const rarityCol = optIsSuperRare ? '#ff44ff' : optIsAffix ? '#ff8844' : isOwned ? '#44eeff' : '#8899aa';
 
     // Card float animation
     const bob = Math.sin(t * 0.04 + i * 1.5) * 2;
@@ -4953,7 +5655,7 @@ function drawSelectionScreen() {
 
     // Level progress bar for owned upgrades
     if (isOwned) {
-      const lv = players[game.selectingPlayer].upgradeLevels.get((opt as Upgrade).id) || 0;
+      const lv = ps.upgradeLevels.get((opt as Upgrade).id) || 0;
       const pbW = cardW - 8;
       bx.fillStyle = '#111133';
       bx.fillRect(cx + 4, cardY + 3, pbW, 3);
@@ -4964,8 +5666,8 @@ function drawSelectionScreen() {
     }
 
     // Tag
-    const tagText = optIsSkill ? 'COMP\xC9TENCE' : optIsSuperRare ? 'SUPER RARE' : optIsAffix ? 'L\xC9GENDAIRE' : isOwned ? 'POSS\xC9D\xC9' : 'NOUVEAU';
-    const tagCol = isOwned ? '#44eeff' : optIsSkill ? '#44ffcc' : optIsSuperRare ? '#ff44ff' : optIsAffix ? '#ff8844' : '#88aa44';
+    const tagText = optIsSuperRare ? 'SUPER RARE' : optIsAffix ? 'L\xC9GENDAIRE' : isOwned ? 'POSS\xC9D\xC9' : 'NOUVEAU';
+    const tagCol = isOwned ? '#44eeff' : optIsSuperRare ? '#ff44ff' : optIsAffix ? '#ff8844' : '#88aa44';
     drawText(tagText, cx + (cardW - textWidth(tagText, 1)) / 2, cardY + (isOwned ? 8 : 4), tagCol, 1);
 
     // Icon (floating bob for new items)
@@ -4992,16 +5694,17 @@ function drawSelectionScreen() {
 
     if (optIsUpgrade) {
       const upg = opt as Upgrade;
-      const currentLv = players[game.selectingPlayer].upgradeLevels.get(upg.id) || 0;
+      const currentLv = ps.upgradeLevels.get(upg.id) || 0;
       const newLv = currentLv + 1;
 
       // Stat gain
       const gain = getStatGain(upg.id, newLv);
-      drawText(gain, cx + (cardW - textWidth(gain)) / 2, cardY + 64, '#44ff88');
+      const gainScale = textWidth(gain) > cardW - 8 ? 1 : 2;
+      drawText(gain, cx + (cardW - textWidth(gain, gainScale)) / 2, cardY + 64, '#44ff88', gainScale);
 
       // Level or NEW badge
       if (currentLv > 0) {
-        const lvText = 'LV ' + currentLv + '>' + newLv;
+        const lvText = 'NV ' + currentLv + '>' + newLv;
         drawText(lvText, cx + (cardW - textWidth(lvText, 1)) / 2, cardY + 78, '#aaaacc', 1);
       } else {
         // NEW label uses the tag at top (already says "NEW"), no extra badge needed
@@ -5013,7 +5716,7 @@ function drawSelectionScreen() {
         const combo = combos[0];
         const partnerId = combo.upgrade1 === upg.id ? combo.upgrade2 : combo.upgrade1;
         const partner = UPGRADES.find(u => u.id === partnerId);
-        const partnerLv = players[game.selectingPlayer].upgradeLevels.get(partnerId) || 0;
+        const partnerLv = ps.upgradeLevels.get(partnerId) || 0;
         const done = newLv >= MAX_UPGRADE_LEVEL && partnerLv >= MAX_UPGRADE_LEVEL;
         // Format: "+ PARTNER = COMBO"
         if (partner) {
@@ -5036,6 +5739,28 @@ function drawSelectionScreen() {
     // Key hint (bottom-left, small)
     const hint = '' + (i + 1);
     drawText(hint, cx + 4, cardY + cardH - 10, '#444455', 1);
+  }
+}
+
+function drawSelectionScreen() {
+  bx.fillStyle = 'rgba(0,0,0,0.8)';
+  bx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  const isSplitScreen = !players[0].dead && !players[1].dead
+    && (players[0].selectionOptions.length > 0 || players[1].selectionOptions.length > 0
+        || players[0].selectionDone || players[1].selectionDone);
+
+  if (isSplitScreen) {
+    // Divider line
+    bx.fillStyle = '#333344';
+    bx.fillRect(VIEW_W / 2 - 1, 0, 2, VIEW_H);
+
+    drawPlayerSelectionHalf(players[0], true, true);
+    drawPlayerSelectionHalf(players[1], true, false);
+  } else {
+    // Full screen for chest/skill or single player alive
+    const activePs = players.find(p => !p.selectionDone && p.selectionOptions.length > 0) || players[game.selectingPlayer];
+    drawPlayerSelectionHalf(activePs, false, true);
   }
 }
 
@@ -5161,27 +5886,69 @@ function drawCodex() {
 }
 
 function drawGameOver() {
-  bx.fillStyle = 'rgba(0,0,0,0.7)';
+  bx.fillStyle = 'rgba(0,0,0,0.85)';
   bx.fillRect(0, 0, VIEW_W, VIEW_H);
 
   const cx = VIEW_W / 2;
-  const title = game.won ? 'VOUS AVEZ SURVÉCU' : 'PARTIE TERMINÉE';
+  const title = game.won ? 'VOUS AVEZ SURVECU' : 'PARTIE TERMINEE';
   const titleColor = game.won ? '#44ff44' : '#ff4444';
-  drawText(title, cx - textWidth(title, 3) / 2, VIEW_H / 2 - 50, titleColor, 3);
-  drawText(formatTime(game.time), cx - textWidth(formatTime(game.time), 2) / 2, VIEW_H / 2 - 20, '#ffcc44', 2);
+  drawText(title, cx - textWidth(title, 3) / 2, 40, titleColor, 3);
+  drawText(formatTime(game.time), cx - textWidth(formatTime(game.time), 2) / 2, 65, '#ffcc44', 2);
 
-  const killsText = 'VICTIMES: ' + game.kills;
-  drawText(killsText, cx - textWidth(killsText) / 2, VIEW_H / 2 + 5, '#aaaaaa');
-  const lvP1 = 'J1 NV' + players[0].level;
-  const lvP2 = 'J2 NV' + players[1].level;
-  drawText(lvP1, cx - textWidth(lvP1) / 2 - 40, VIEW_H / 2 + 18, COL.xpOrb);
-  drawText(lvP2, cx - textWidth(lvP2) / 2 + 40, VIEW_H / 2 + 18, '#44ddff');
+  const lvText2 = 'NIVEAU ' + game.level;
+  drawText(lvText2, cx - textWidth(lvText2, 1) / 2, 82, COL.xpOrb, 1);
+
+  // Per-player stats
+  const twoPlayers = !players[1].dead || players[1].kills > 0 || players[1].totalDamage > 0;
+  const colW = twoPlayers ? VIEW_W / 2 - 20 : VIEW_W - 40;
+
+  for (let pi = 0; pi < (twoPlayers ? 2 : 1); pi++) {
+    const pp = players[pi];
+    const px = twoPlayers ? (pi === 0 ? 20 : VIEW_W / 2 + 10) : 20;
+    const py = 100;
+
+    // Player name header
+    drawText(playerNames[pi], px, py, pp.visorColor, 2);
+
+    // Stats
+    const stats = [
+      ['VICTIMES', '' + pp.kills],
+      ['DEGATS', '' + Math.floor(pp.totalDamage)],
+      ['UPGRADES', '' + pp.upgradeLevels.size],
+      ['COMBOS', '' + pp.activeCombos.length],
+      ['AFFIXES', '' + pp.activeAffixes.length],
+    ];
+
+    for (let si = 0; si < stats.length; si++) {
+      const [label, value] = stats[si];
+      drawText(label, px, py + 20 + si * 12, '#777788', 1);
+      drawText(value, px + textWidth(label, 1) + 6, py + 20 + si * 12, '#ffffff', 1);
+    }
+
+    // List upgrades
+    let uy = py + 20 + stats.length * 12 + 6;
+    for (const [id, lv] of pp.upgradeLevels) {
+      const upg = UPGRADES.find(u => u.id === id);
+      if (upg) {
+        const col = lv >= MAX_UPGRADE_LEVEL ? '#44ff88' : '#8899aa';
+        drawText(upg.name + ' NV' + lv, px, uy, col, 1);
+        uy += 8;
+        if (uy > VIEW_H - 30) break;
+      }
+    }
+  }
+
+  // Divider line (2 players)
+  if (twoPlayers) {
+    bx.fillStyle = '#333344';
+    bx.fillRect(VIEW_W / 2, 100, 1, VIEW_H - 130);
+  }
 
   if (game.deathScreenTimer > 60) {
     const blink = Math.floor(game.deathScreenTimer / 20) % 2 === 0;
     if (blink) {
-      const retryText = 'CLIQUEZ POUR RECOMMENCER';
-      drawText(retryText, cx - textWidth(retryText) / 2, VIEW_H / 2 + 40, '#888888');
+      const retryText = 'ECHAP POUR RECOMMENCER';
+      drawText(retryText, cx - textWidth(retryText, 1) / 2, VIEW_H - 20, '#888888', 1);
     }
   }
 }
